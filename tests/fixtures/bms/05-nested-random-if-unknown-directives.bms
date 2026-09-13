@@ -1,0 +1,13 @@
+#TITLE Outside
+#RANDOM 2
+#IF 1
+#TITLE In IF
+#IF 1
+#UNKNOWN nested-value
+#ENDIF
+#ENDIF
+#ENDRANDOM
+#UNKNOWN outside-value
+#BPM 150
+#WAV01 tone.wav
+#00111:01

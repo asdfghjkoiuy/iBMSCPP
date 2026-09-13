@@ -1,0 +1,6 @@
+#TITLE Synthetic duplicate rows
+#BPM 120
+#00001:0100
+#00001:0001
+#00011:0100
+#00011:0001

@@ -1,0 +1,10 @@
+#TITLE RandomDemo
+#BPM 130
+#WAV01 kick.wav
+#WAV02 snare.wav
+#RANDOM 2
+#IF 1
+#00011:01
+#ELSEIF 2
+#00012:02
+#ENDIF

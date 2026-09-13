@@ -1,0 +1,8 @@
+#TITLE Invalid numeric references
+#BPM01 nope
+#STOP01 not-a-number
+#00008:0100
+#00008:0200
+#00009:0100
+#00009:0200
+#00003:G100

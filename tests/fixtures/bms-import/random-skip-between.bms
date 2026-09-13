@@ -1,0 +1,7 @@
+#TITLE SkipBetween
+#WAV01 kick.wav
+#RANDOM 2
+#WAV02 skipped.wav
+#IF 1
+#00011:01
+#ENDIF

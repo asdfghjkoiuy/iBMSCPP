@@ -1,0 +1,617 @@
+{
+  "schema": "bms-chart-fixture-manifest-v1",
+  "scope": "synthetic no-assets BMS event fixtures; no copyrighted music or external resources",
+  "position_contract": {
+    "measure_fraction": "rational slot position within the source measure",
+    "absolute_quarterbeats": "rational quarter-beat position from chart start; never the VB 192-unit value",
+    "default_measure_length_quarterbeats": "4/1",
+    "measure_ratio_rule": "measure length = ratio * 4 quarterbeats"
+  },
+  "source_baseline": {
+    "repository": "local nested iBMSC repository",
+    "commit": "f5b21d1de50ce28202d1b2e8d2f614fabde18092",
+    "chart_io_parse": "iBMSC/iBMSC/ChartIO.vb:175-248",
+    "chart_io_open": "iBMSC/iBMSC/ChartIO.vb:4-21,31-140",
+    "lane_mapping": "iBMSC/iBMSC/EditorColumns.vb:5-175",
+    "write_select_drag_delete": "iBMSC/iBMSC/PanelEvents.vb:120-239,515-625,930-1033,1356-1475,1587-1674; iBMSC/iBMSC/MainWindow.vb:4092-4100",
+    "canvas_grid_designer": "iBMSC/iBMSC/MainWindow.designer.vb:1840-2083,3965-4175"
+  },
+  "fixtures": [
+    {
+      "filename": "01-normal-1p-2p-lanes.bms",
+      "byte_length": 470,
+      "sha256": "8aca2d1359ffae8f0cdecd2c00ebe3602c652145ae411dd5588edc9183ee7a98",
+      "description": "All source-supported 1P and 2P normal lanes, with explicit unsupported 17 and 27 rows.",
+      "editable": true,
+      "expected_events": [
+        {
+          "measure": 0,
+          "measure_fraction": "0",
+          "absolute_quarterbeats": "0",
+          "channel": "11",
+          "lane": "1P-A2",
+          "lane_index": 6,
+          "value": "01"
+        },
+        {
+          "measure": 0,
+          "measure_fraction": "1/8",
+          "absolute_quarterbeats": "1/2",
+          "channel": "12",
+          "lane": "1P-A3",
+          "lane_index": 7,
+          "value": "01"
+        },
+        {
+          "measure": 0,
+          "measure_fraction": "1/4",
+          "absolute_quarterbeats": "1",
+          "channel": "13",
+          "lane": "1P-A4",
+          "lane_index": 8,
+          "value": "01"
+        },
+        {
+          "measure": 0,
+          "measure_fraction": "3/8",
+          "absolute_quarterbeats": "3/2",
+          "channel": "14",
+          "lane": "1P-A5",
+          "lane_index": 9,
+          "value": "01"
+        },
+        {
+          "measure": 0,
+          "measure_fraction": "1/2",
+          "absolute_quarterbeats": "2",
+          "channel": "15",
+          "lane": "1P-A6",
+          "lane_index": 10,
+          "value": "01"
+        },
+        {
+          "measure": 0,
+          "measure_fraction": "5/8",
+          "absolute_quarterbeats": "5/2",
+          "channel": "16",
+          "lane": "1P-A1",
+          "lane_index": 5,
+          "value": "01"
+        },
+        {
+          "measure": 0,
+          "measure_fraction": "3/4",
+          "absolute_quarterbeats": "3",
+          "channel": "18",
+          "lane": "1P-A7",
+          "lane_index": 11,
+          "value": "01"
+        },
+        {
+          "measure": 0,
+          "measure_fraction": "7/8",
+          "absolute_quarterbeats": "7/2",
+          "channel": "19",
+          "lane": "1P-A8",
+          "lane_index": 12,
+          "value": "01"
+        },
+        {
+          "measure": 0,
+          "measure_fraction": "0",
+          "absolute_quarterbeats": "0",
+          "channel": "21",
+          "lane": "2P-D1",
+          "lane_index": 14,
+          "value": "01"
+        },
+        {
+          "measure": 0,
+          "measure_fraction": "1/8",
+          "absolute_quarterbeats": "1/2",
+          "channel": "22",
+          "lane": "2P-D2",
+          "lane_index": 15,
+          "value": "01"
+        },
+        {
+          "measure": 0,
+          "measure_fraction": "1/4",
+          "absolute_quarterbeats": "1",
+          "channel": "23",
+          "lane": "2P-D3",
+          "lane_index": 16,
+          "value": "01"
+        },
+        {
+          "measure": 0,
+          "measure_fraction": "3/8",
+          "absolute_quarterbeats": "3/2",
+          "channel": "24",
+          "lane": "2P-D4",
+          "lane_index": 17,
+          "value": "01"
+        },
+        {
+          "measure": 0,
+          "measure_fraction": "1/2",
+          "absolute_quarterbeats": "2",
+          "channel": "25",
+          "lane": "2P-D5",
+          "lane_index": 18,
+          "value": "01"
+        },
+        {
+          "measure": 0,
+          "measure_fraction": "5/8",
+          "absolute_quarterbeats": "5/2",
+          "channel": "26",
+          "lane": "2P-D8",
+          "lane_index": 21,
+          "value": "01"
+        },
+        {
+          "measure": 0,
+          "measure_fraction": "3/4",
+          "absolute_quarterbeats": "3",
+          "channel": "28",
+          "lane": "2P-D6",
+          "lane_index": 19,
+          "value": "01"
+        },
+        {
+          "measure": 0,
+          "measure_fraction": "7/8",
+          "absolute_quarterbeats": "7/2",
+          "channel": "29",
+          "lane": "2P-D7",
+          "lane_index": 20,
+          "value": "01"
+        }
+      ],
+      "ignored_channels": [
+        "17",
+        "27"
+      ],
+      "has_conditionals": false,
+      "chartio_loadable": true,
+      "raw_source_preservation_expected": true,
+      "loadable": true,
+      "expected_events_scope": "supported_mapped_channels_only",
+      "raw_syntactic_events": [
+        {
+          "measure": 0,
+          "measure_fraction": "0",
+          "absolute_quarterbeats": "0",
+          "channel": "17",
+          "value": "01",
+          "source_row": 19,
+          "support_status": "unsupported_channel_not_lane_event"
+        },
+        {
+          "measure": 0,
+          "measure_fraction": "1/8",
+          "absolute_quarterbeats": "1/2",
+          "channel": "27",
+          "value": "01",
+          "source_row": 20,
+          "support_status": "unsupported_channel_not_lane_event"
+        }
+      ]
+    },
+    {
+      "filename": "02-thirds-and-12grid.bms",
+      "byte_length": 122,
+      "sha256": "f1f1104df44459fba660e521518477089898d1646a8c7f5facea790c4aafd9c9",
+      "description": "Three slots in measure 0 and twelve slots in measure 1.",
+      "editable": true,
+      "expected_events": [
+        {
+          "measure": 0,
+          "measure_fraction": "0/1",
+          "absolute_quarterbeats": "0/1",
+          "channel": "11",
+          "lane": "1P-A2",
+          "lane_index": 6,
+          "value": "01"
+        },
+        {
+          "measure": 0,
+          "measure_fraction": "1/3",
+          "absolute_quarterbeats": "4/3",
+          "channel": "11",
+          "lane": "1P-A2",
+          "lane_index": 6,
+          "value": "02"
+        },
+        {
+          "measure": 0,
+          "measure_fraction": "2/3",
+          "absolute_quarterbeats": "8/3",
+          "channel": "11",
+          "lane": "1P-A2",
+          "lane_index": 6,
+          "value": "03"
+        },
+        {
+          "measure": 1,
+          "measure_fraction": "0/1",
+          "absolute_quarterbeats": "4/1",
+          "channel": "12",
+          "lane": "1P-A3",
+          "lane_index": 7,
+          "value": "01"
+        },
+        {
+          "measure": 1,
+          "measure_fraction": "11/12",
+          "absolute_quarterbeats": "23/3",
+          "channel": "12",
+          "lane": "1P-A3",
+          "lane_index": 7,
+          "value": "0B"
+        }
+      ],
+      "has_conditionals": false,
+      "grid_expectation": {
+        "default_division": 16,
+        "default_snap_step_quarterbeats": "1/4"
+      },
+      "chartio_loadable": true,
+      "raw_source_preservation_expected": true,
+      "loadable": true
+    },
+    {
+      "filename": "03-measure-ratios-0.5-1.5.bms",
+      "byte_length": 89,
+      "sha256": "d501c4942e747cd254e67c18ba05d5ade984a83fee4d28d70254a39cf9206b5f",
+      "description": "Measure 1 ratio 0.5 and measure 2 ratio 1.5 with rational event positions.",
+      "editable": true,
+      "expected_events": [
+        {
+          "measure": 1,
+          "measure_fraction": "0/1",
+          "absolute_quarterbeats": "4/1",
+          "channel": "11",
+          "lane": "1P-A2",
+          "lane_index": 6,
+          "value": "01"
+        },
+        {
+          "measure": 1,
+          "measure_fraction": "1/2",
+          "absolute_quarterbeats": "5/1",
+          "channel": "11",
+          "lane": "1P-A2",
+          "lane_index": 6,
+          "value": "02"
+        },
+        {
+          "measure": 2,
+          "measure_fraction": "0/1",
+          "absolute_quarterbeats": "6/1",
+          "channel": "12",
+          "lane": "1P-A3",
+          "lane_index": 7,
+          "value": "01"
+        },
+        {
+          "measure": 2,
+          "measure_fraction": "1/3",
+          "absolute_quarterbeats": "8/1",
+          "channel": "12",
+          "lane": "1P-A3",
+          "lane_index": 7,
+          "value": "02"
+        },
+        {
+          "measure": 2,
+          "measure_fraction": "2/3",
+          "absolute_quarterbeats": "10/1",
+          "channel": "12",
+          "lane": "1P-A3",
+          "lane_index": 7,
+          "value": "03"
+        }
+      ],
+      "has_conditionals": false,
+      "grid_expectation": {
+        "default_division": 16,
+        "ratio_0.5_steps": 8,
+        "ratio_1.5_steps": 24
+      },
+      "chartio_loadable": true,
+      "raw_source_preservation_expected": true,
+      "loadable": true
+    },
+    {
+      "filename": "04-duplicate-bgm-and-normal-rows.bms",
+      "byte_length": 89,
+      "sha256": "d8dfabd0cc5a3b02aec97b71c19ab4b8ea6e0ee6b46f0769d3424db0c290d15a",
+      "description": "Duplicate 01 BGM rows receive independent columns; same normal channel rows occupy distinct positions.",
+      "editable": true,
+      "expected_events": [
+        {
+          "measure": 0,
+          "measure_fraction": "0/1",
+          "absolute_quarterbeats": "0/1",
+          "channel": "01",
+          "lane": "B1",
+          "lane_index": 27,
+          "value": "01",
+          "source_row": 3
+        },
+        {
+          "measure": 0,
+          "measure_fraction": "1/2",
+          "absolute_quarterbeats": "2/1",
+          "channel": "01",
+          "lane": "B2",
+          "lane_index": 28,
+          "value": "01",
+          "source_row": 4
+        },
+        {
+          "measure": 0,
+          "measure_fraction": "0/1",
+          "absolute_quarterbeats": "0/1",
+          "channel": "11",
+          "lane": "1P-A2",
+          "lane_index": 6,
+          "value": "01",
+          "source_row": 5
+        },
+        {
+          "measure": 0,
+          "measure_fraction": "1/2",
+          "absolute_quarterbeats": "2/1",
+          "channel": "11",
+          "lane": "1P-A2",
+          "lane_index": 6,
+          "value": "01",
+          "source_row": 6
+        }
+      ],
+      "has_conditionals": false,
+      "duplicate_row_rule": "Channel 01 increments mColumn per source row; normal-channel rows share the mapped lane and remain separate when positions do not collide.",
+      "chartio_loadable": true,
+      "raw_source_preservation_expected": true,
+      "loadable": true
+    },
+    {
+      "filename": "05-bom-mixed-eol-no-final-newline.bms",
+      "byte_length": 53,
+      "sha256": "d1c0330c8b7130a889f46d2728b72073fee1cf990c299beef16f02f8b185e5ce",
+      "description": "UTF-8 BOM, CRLF/LF/CR mixture, and no final newline.",
+      "editable": true,
+      "expected_events": [
+        {
+          "measure": 0,
+          "measure_fraction": "0/1",
+          "absolute_quarterbeats": "0/1",
+          "channel": "11",
+          "lane": "1P-A2",
+          "lane_index": 6,
+          "value": "01",
+          "source_row": 3
+        },
+        {
+          "measure": 0,
+          "measure_fraction": "1/2",
+          "absolute_quarterbeats": "2/1",
+          "channel": "11",
+          "lane": "1P-A2",
+          "lane_index": 6,
+          "value": "01",
+          "source_row": 3
+        },
+        {
+          "measure": 1,
+          "measure_fraction": "1/2",
+          "absolute_quarterbeats": "6/1",
+          "channel": "12",
+          "lane": "1P-A3",
+          "lane_index": 7,
+          "value": "01",
+          "source_row": 4
+        }
+      ],
+      "has_conditionals": false,
+      "utf8_bom": true,
+      "line_endings": [
+        "CRLF",
+        "LF",
+        "CR"
+      ],
+      "final_newline": false,
+      "chartio_loadable": true,
+      "raw_source_preservation_expected": true,
+      "loadable": true
+    },
+    {
+      "filename": "06-readonly-lnobj-candidate.bms",
+      "byte_length": 65,
+      "sha256": "869a9caa6f3c2e32cdcdf5f1500860ecfaa6085c5a652f6af3d00a3fcf4e6579",
+      "description": "LNOBJ metadata with normal-channel endpoint candidates; pairing is left as a read-only source case.",
+      "editable": false,
+      "readonly_reason": "LNOBJ pairing and conversion semantics require a dedicated compatibility pass.",
+      "expected_events": [
+        {
+          "measure": 0,
+          "measure_fraction": "0/1",
+          "absolute_quarterbeats": "0/1",
+          "channel": "11",
+          "lane": "1P-A2",
+          "lane_index": 6,
+          "value": "01",
+          "role": "lnobj-candidate"
+        },
+        {
+          "measure": 0,
+          "measure_fraction": "2/3",
+          "absolute_quarterbeats": "8/3",
+          "channel": "11",
+          "lane": "1P-A2",
+          "lane_index": 6,
+          "value": "01",
+          "role": "lnobj-candidate"
+        }
+      ],
+      "has_conditionals": false,
+      "lnobj": "01",
+      "chartio_loadable": true,
+      "raw_source_preservation_expected": true,
+      "loadable": true
+    },
+    {
+      "filename": "07-readonly-ln-endpoint.bms",
+      "byte_length": 61,
+      "sha256": "b39b0bb55cb578b9d9e0fd7e21080718e4375426414f5b2716e048be6e2d58aa",
+      "description": "LNTYPE 1 long-note channel with start and endpoint records.",
+      "editable": false,
+      "readonly_reason": "Long-note endpoint pairing and conversion are outside this normal-note batch.",
+      "expected_events": [
+        {
+          "measure": 0,
+          "measure_fraction": "0/1",
+          "absolute_quarterbeats": "0/1",
+          "channel": "51",
+          "lane": "1P-A2",
+          "lane_index": 6,
+          "value": "01",
+          "role": "ln-start",
+          "long_note_channel": true
+        },
+        {
+          "measure": 0,
+          "measure_fraction": "2/3",
+          "absolute_quarterbeats": "8/3",
+          "channel": "51",
+          "lane": "1P-A2",
+          "lane_index": 6,
+          "value": "01",
+          "role": "ln-endpoint",
+          "long_note_channel": true
+        }
+      ],
+      "has_conditionals": false,
+      "long_note_channels": [
+        "51"
+      ],
+      "chartio_loadable": true,
+      "raw_source_preservation_expected": true,
+      "loadable": true
+    },
+    {
+      "filename": "08-readonly-conditional-branch.bms",
+      "byte_length": 102,
+      "sha256": "1feadee0e35838adf70280d1536a9c21aa999164c9e7b259728cacb5b0e4c0a2",
+      "description": "Conditional branch contains a note and an outside note; the new core exposes no evaluated events for a conditional chart.",
+      "editable": false,
+      "readonly_reason": "ChartIO skips records while its conditional stack is active; branch evaluation is not asserted.",
+      "expected_events": [],
+      "has_conditionals": true,
+      "chartio_loadable": true,
+      "raw_source_preservation_expected": true,
+      "loadable": true,
+      "expected_events_scope": "no_evaluated_events_when_conditionals_present",
+      "raw_syntactic_events": [
+        {
+          "measure": 0,
+          "measure_fraction": "0",
+          "absolute_quarterbeats": "0",
+          "channel": "11",
+          "value": "01",
+          "source_row": 5,
+          "conditional_context": "RANDOM/IF branch"
+        },
+        {
+          "measure": 0,
+          "measure_fraction": "1/2",
+          "absolute_quarterbeats": "2",
+          "channel": "12",
+          "value": "01",
+          "source_row": 8,
+          "conditional_context": "outside branch"
+        }
+      ]
+    },
+    {
+      "filename": "09-readonly-malformed-channel.bms",
+      "byte_length": 83,
+      "sha256": "fe0429e2fe2f49568a60f4bf70eab8c7c0673d807eabc4d6382faa42151e3dfe",
+      "description": "Malformed channel line plus two valid normal-channel rows.",
+      "editable": false,
+      "readonly_reason": "Malformed-line handling is retained as a read-only compatibility case.",
+      "expected_events": [
+        {
+          "measure": 0,
+          "measure_fraction": "0/1",
+          "absolute_quarterbeats": "0/1",
+          "channel": "11",
+          "lane": "1P-A2",
+          "lane_index": 6,
+          "value": "01",
+          "source_row": 4
+        },
+        {
+          "measure": 0,
+          "measure_fraction": "1/2",
+          "absolute_quarterbeats": "2/1",
+          "channel": "12",
+          "lane": "1P-A3",
+          "lane_index": 7,
+          "value": "01",
+          "source_row": 5
+        }
+      ],
+      "has_conditionals": false,
+      "ignored_lines": [
+        "#00011",
+        "#BADLINE"
+      ],
+      "chartio_loadable": true,
+      "raw_source_preservation_expected": true,
+      "loadable": true
+    },
+    {
+      "filename": "10-radix-edge-hex-bpm-vs-base36-object.bms",
+      "byte_length": 51,
+      "sha256": "87f199a3299b183e24e4434fea7dfdceb8bfd57d2e8a1484812d97eb3829be1e",
+      "description": "Channel 03 rejects G1 as non-hex while channel 11 accepts G1 as a base36 object index.",
+      "loadable": false,
+      "editable": false,
+      "readonly_reason": "The source ChartIO path parses channel 03 values as hexadecimal and rejects G1; this is an oracle edge, not a normal editable chart.",
+      "has_conditionals": false,
+      "expected_events": [
+        {
+          "measure": 0,
+          "measure_fraction": "0/1",
+          "absolute_quarterbeats": "0/1",
+          "channel": "11",
+          "lane": "1P-A2",
+          "lane_index": 6,
+          "value": "G1",
+          "value_base": 36,
+          "object_index_decimal": 577,
+          "source_row": 3
+        }
+      ],
+      "expected_rejection": {
+        "source_row": 4,
+        "channel": "03",
+        "value": "G1",
+        "value_base": 16,
+        "reason": "ChartIO.vb uses Convert.ToInt32(token, 16) for channel 03 values."
+      },
+      "chartio_loadable": false,
+      "raw_source_preservation_expected": true
+    }
+  ],
+  "oracle_edges": {
+    "channel_03": "Object tokens are parsed as hexadecimal; G1 is rejected even though it is valid base36.",
+    "normal_object_channels": "Normal note channels such as 11 use the base36 object alphabet; G1 is valid and equals decimal 577.",
+    "unsupported_17_27": "Channels 17 and 27 are absent from BMSChannelToColumn and must not be treated as additional 8-lane columns.",
+    "pms_9key": "PMS 9-key mapping is outside this fixture batch; no fixture asserts a 9-key layout."
+  }
+}

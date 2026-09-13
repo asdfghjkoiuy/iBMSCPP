@@ -1,0 +1,8 @@
+#TITLE Readonly conditional branch
+#BPM 120
+#RANDOM 2
+#IF 1
+#00011:0100
+#ENDIF
+#ENDRANDOM
+#00012:0001

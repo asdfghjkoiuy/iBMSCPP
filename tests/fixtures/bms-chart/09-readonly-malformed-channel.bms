@@ -1,0 +1,6 @@
+#TITLE Readonly malformed channel
+#BPM 120
+#00011
+#00011:0100
+#00012:0001
+#BADLINE

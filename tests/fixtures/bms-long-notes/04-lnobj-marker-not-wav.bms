@@ -1,0 +1,6 @@
+#TITLE LNOBJ marker not WAV
+#LNOBJ ZZ
+#WAV01 sample.wav
+#00011:0100
+#00111:00ZZ
+#00211:0100

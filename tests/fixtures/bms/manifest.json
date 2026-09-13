@@ -1,0 +1,152 @@
+{
+  "schema": "bms-fixture-manifest-v1",
+  "corpus_scope": "synthetic BMS byte fixtures; no copyrighted real music",
+  "source_baseline": {
+    "repository": "local nested iBMSC repository",
+    "commit": "f5b21d1de50ce28202d1b2e8d2f614fabde18092",
+    "chart_io": "iBMSC/iBMSC/ChartIO.vb:4-234",
+    "read_encoding": "iBMSC/iBMSC/MainWindow.vb:58,975-978"
+  },
+  "fixtures": [
+    {
+      "filename": "01-mixed-endings-no-final-newline.bms",
+      "byte_length": 83,
+      "sha256": "16ab9320ff40334f8dd5a22434df0f9d56729213e76a0a28b559de651ef5ed12",
+      "description": "混合 CRLF、LF、CR，且文件末尾没有换行。内容只使用 ASCII。",
+      "expected_header": {
+        "encoding": "ascii",
+        "raw_prefix_hex": "235449544c45204d6978656420456e64696e67730d0a23415254495354205379",
+        "display_source_text": "#TITLE Mixed Endings\\r\\n#ARTIST Synthetic Fixture\\n#BPM 120\\r#WAV01 tone.wav\\r\\n#00111:01"
+      },
+      "has_conditionals": false,
+      "expected_metadata_hex": {
+        "TITLE": "4d6978656420456e64696e6773",
+        "ARTIST": "53796e7468657469632046697874757265",
+        "BPM": "313230",
+        "WAV01": "746f6e652e776176"
+      },
+      "loadable": true,
+      "raw_round_trip": true,
+      "editable": true,
+      "original_behavior_notes": [
+        "Original ChartIO.vb:4-10 normalizes LF/CR to CRLF before splitting; this is source context only."
+      ]
+    },
+    {
+      "filename": "02-utf8-bom-metadata.bms",
+      "byte_length": 76,
+      "sha256": "94233a4be186c65a6f33686c94a14046da0a65dcbdd3b7884ed922a296261ce7",
+      "description": "UTF-8 BOM 和中文元数据。",
+      "expected_header": {
+        "encoding": "utf-8-sig",
+        "raw_prefix_hex": "efbbbf235449544c45205554462d3820424f4d0a2341525449535420e7a4bae4",
+        "display_source_text": "#TITLE UTF-8 BOM\\n#ARTIST 示例作者\\n#BPM 120\\n#WAV01 tone.wav\\n#00111:01\\n"
+      },
+      "has_conditionals": false,
+      "expected_metadata_hex": {
+        "TITLE": "5554462d3820424f4d",
+        "ARTIST": "e7a4bae4be8be4bd9ce88085",
+        "BPM": "313230",
+        "WAV01": "746f6e652e776176"
+      },
+      "loadable": true,
+      "raw_round_trip": true,
+      "editable": true,
+      "original_behavior_notes": [
+        "Original MainWindow.vb:58,975-978 uses default UTF-8 TextEncoding for ReadAllText; this is source context only."
+      ]
+    },
+    {
+      "filename": "03-shiftjis-japanese-metadata.bms",
+      "byte_length": 80,
+      "sha256": "7b1a2f7b275dd2a4435c05e8112d8ba4a98c8a30bf6ef9bd014b9fc8ea5590b3",
+      "description": "真实 Shift-JIS 字节的日文元数据；不含真实音乐内容。",
+      "expected_header": {
+        "encoding": "shift_jis",
+        "raw_prefix_hex": "235449544c452093fa967b8cea8381835e8366815b835e0d0a23415254495354",
+        "display_source_text": "#TITLE 日本語メタデータ\\r\\n#ARTIST 合成作者\\r\\n#BPM 130\\r\\n#WAV01 oto.wav\\r\\n#00111:01\\r\\n"
+      },
+      "has_conditionals": false,
+      "expected_metadata_hex": {
+        "TITLE": "93fa967b8cea8381835e8366815b835e",
+        "ARTIST": "8d8790ac8dec8ed2",
+        "BPM": "313330",
+        "WAV01": "6f746f2e776176"
+      },
+      "loadable": true,
+      "raw_round_trip": true,
+      "editable": true,
+      "original_behavior_notes": [
+        "Original MainWindow.vb:58,975-978 defaults to UTF-8; new-core raw loading remains expected regardless of UI encoding, while decoded display depends on the selected encoding."
+      ]
+    },
+    {
+      "filename": "04-duplicate-headers-titleimage-boundary.bms",
+      "byte_length": 104,
+      "sha256": "1fea13fc8d5a1078644120d63afa8f64fa3285850a2587f5eebd0d72ebc3a652",
+      "description": "重复 TITLE 和 TITLEIMAGE 边界；用于检查 StartsWith 匹配及原始头字段记录。",
+      "expected_header": {
+        "encoding": "ascii",
+        "raw_prefix_hex": "235449544c452046697273740a235449544c45205365636f6e640a235449544c",
+        "display_source_text": "#TITLE First\\n#TITLE Second\\n#TITLEIMAGE bg.png\\n#ARTIST Fixture Artist\\n#BPM 140\\n#WAV01 tone.wav\\n#00111:01\\n"
+      },
+      "has_conditionals": false,
+      "expected_metadata_hex": {
+        "TITLE": "5365636f6e64",
+        "ARTIST": "4669787475726520417274697374",
+        "BPM": "313430",
+        "WAV01": "746f6e652e776176"
+      },
+      "loadable": true,
+      "raw_round_trip": true,
+      "editable": true,
+      "original_behavior_notes": [
+        "ChartIO.vb:70-71 使用 StartsWith(\"#TITLE\")；最终 TITLEIMAGE 行可能进入 TITLE 分支，需运行时核对。"
+      ]
+    },
+    {
+      "filename": "05-nested-random-if-unknown-directives.bms",
+      "byte_length": 155,
+      "sha256": "3f78d08ec4b993b7032b53012486030fac8cc9e13410b05bc50331716241a3f4",
+      "description": "嵌套 RANDOM/IF、分支内元数据和未知指令；只使用合成文本。",
+      "expected_header": {
+        "encoding": "ascii",
+        "raw_prefix_hex": "235449544c45204f7574736964650a2352414e444f4d20320a23494620310a23",
+        "display_source_text": "#TITLE Outside\\n#RANDOM 2\\n#IF 1\\n#TITLE In IF\\n#IF 1\\n#UNKNOWN nested-value\\n#ENDIF\\n#ENDIF\\n#ENDRANDOM\\n#UNKNOWN outside-value\\n#BPM 150\\n#WAV01 tone.wav\\n#00111:01\\n"
+      },
+      "has_conditionals": true,
+      "expected_metadata_hex": null,
+      "loadable": true,
+      "raw_round_trip": true,
+      "editable": false,
+      "original_behavior_notes": [
+        "ChartIO.vb:152-165 直接处理 IF/ENDIF、SWITCH/ENDSW；RANDOM/ENDRANDOM 的完整语义需运行时核对。"
+      ]
+    },
+    {
+      "filename": "06-malformed-channel-valid-records.bms",
+      "byte_length": 147,
+      "sha256": "f16336da3d97e90cacd8789c44da49de57910daa47e241eaaaeef268a391910e",
+      "description": "过短的通道行与有效 WAV、BPM、STOP、03/08/09/11 通道记录并存。",
+      "expected_header": {
+        "encoding": "ascii",
+        "raw_prefix_hex": "235449544c45204d616c666f726d6564204368616e6e656c2046697874757265",
+        "display_source_text": "#TITLE Malformed Channel Fixture\\n#BPM 120\\n#WAV01 tone.wav\\n#BPM01 180\\n#STOP01 192\\n#00111:0\\n#00111:01\\n#00103:01\\n#00108:01\\n#00109:01\\n#UNKNOWN keep-me\\n"
+      },
+      "has_conditionals": false,
+      "expected_metadata_hex": {
+        "TITLE": "4d616c666f726d6564204368616e6e656c2046697874757265",
+        "BPM": "313230",
+        "WAV01": "746f6e652e776176",
+        "BPM01": "313830",
+        "STOP01": "313932"
+      },
+      "loadable": true,
+      "raw_round_trip": true,
+      "editable": true,
+      "original_behavior_notes": [
+        "ChartIO.vb:177-205 只对符合通道形状且已映射的行创建 Notes；过短行和未知指令的实际处理待验证。"
+      ]
+    }
+  ]
+}

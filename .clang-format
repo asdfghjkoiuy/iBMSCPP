@@ -1,0 +1,47 @@
+---
+# Clang-Format 配置文件
+Language: Cpp
+
+# 基础格式
+BasedOnStyle: LLVM
+IndentWidth: 4
+UseTab: Never
+ColumnLimit: 120
+
+# 缩进选项
+IndentCaseLabels: true
+IndentPPDirectives: AfterHash
+IndentWrappedFunctionNames: true
+
+# 空格选项
+SpaceBeforeParens: ControlStatements
+SpaceInEmptyParentheses: false
+SpacesInParentheses: false
+SpacesInAngles: false
+SpaceBeforeAssignmentOperators: true
+SpaceAroundPointerQualifiers: Both
+
+# 换行选项
+BreakBeforeBraces: Linux
+BreakConstructorInitializers: BeforeComma
+BreakInheritanceList: BeforeComma
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortFunctionsOnASingleLine: None
+
+# 对齐选项
+AlignAfterOpenBracket: Align
+AlignConsecutiveAssignments: false
+AlignConsecutiveMacros: false
+AlignOperands: Align
+AlignTrailingComments: true
+
+# 指针和引用
+DerivePointerAlignment: false
+PointerAlignment: Left
+ReferenceAlignment: Pointer
+
+# 其他
+ReflowComments: true
+SortIncludes: true
+SortUsingDeclarations: true

@@ -1,0 +1,777 @@
+{
+  "corpus": "synthetic BMS long-note source cases; no audio/image assets",
+  "contract": "Chart events are raw source observations. long_notes is the validated pair view. Original VB pairing notes are independent evidence, not a claim of binary or UI equivalence.",
+  "source_commit": "f5b21d1de50ce28202d1b2e8d2f614fabde18092",
+  "cases": [
+    {
+      "file": "01-lntype-cross-ratio.bms",
+      "description": "LNTYPE 1 channel pair across measure 0 ratio 0.5 and measure 1 ratio 1.5; end token differs from head; mixed CRLF/LF/CR and no final newline.",
+      "sha256": "cc9ed561b582935a6568a891570d0cce6746d272573a7792c0a6790f957602be",
+      "byte_length": 83,
+      "chart_editable": true,
+      "long_notes_editable": true,
+      "events": [
+        {
+          "measure": 0,
+          "channel": "51",
+          "token": "01",
+          "fraction": [
+            0,
+            1
+          ],
+          "beat": [
+            0,
+            1
+          ],
+          "kind": "long_note",
+          "source_line": 4
+        },
+        {
+          "measure": 1,
+          "channel": "51",
+          "token": "ZZ",
+          "fraction": [
+            1,
+            2
+          ],
+          "beat": [
+            5,
+            1
+          ],
+          "kind": "long_note",
+          "source_line": 5
+        }
+      ],
+      "long_notes": [
+        {
+          "channel": "51",
+          "encoding": "long_channel",
+          "start": {
+            "measure": 0,
+            "fraction": [
+              0,
+              1
+            ]
+          },
+          "end": {
+            "measure": 1,
+            "fraction": [
+              1,
+              2
+            ]
+          },
+          "start_token": "01",
+          "end_token": "ZZ",
+          "start_beat": [
+            0,
+            1
+          ],
+          "end_beat": [
+            5,
+            1
+          ],
+          "start_source_line": 4,
+          "end_source_line": 5
+        }
+      ],
+      "original_vb_pairing": "ChartIO marks both channel 51 cells LongNote; UpdatePairing pairs the later same-column endpoint and does not require equal endpoint tokens.",
+      "edit_expectation": "The valid long-channel pair keeps both chart and long-note views editable. Long-note edits use the long-note API; ordinary-note edits are checked against the existing pair semantics and are rejected only when they would alter or overlap protected pairing."
+    },
+    {
+      "file": "02-duplicate-unmatched.bms",
+      "description": "Duplicate same-position channel-51 endpoints, one later channel-51 endpoint, and an unmatched channel-61 endpoint.",
+      "sha256": "b7b98fdd78ce4541d4b512f93c16e7b3bb7a96fbc1c341b69b3075ba5a6676c5",
+      "byte_length": 85,
+      "chart_editable": false,
+      "long_notes_editable": false,
+      "events": [
+        {
+          "measure": 0,
+          "channel": "51",
+          "token": "01",
+          "fraction": [
+            0,
+            1
+          ],
+          "beat": [
+            0,
+            1
+          ],
+          "kind": "long_note",
+          "source_line": 2
+        },
+        {
+          "measure": 0,
+          "channel": "51",
+          "token": "01",
+          "fraction": [
+            0,
+            1
+          ],
+          "beat": [
+            0,
+            1
+          ],
+          "kind": "long_note",
+          "source_line": 3
+        },
+        {
+          "measure": 1,
+          "channel": "51",
+          "token": "01",
+          "fraction": [
+            1,
+            2
+          ],
+          "beat": [
+            6,
+            1
+          ],
+          "kind": "long_note",
+          "source_line": 4
+        },
+        {
+          "measure": 2,
+          "channel": "61",
+          "token": "01",
+          "fraction": [
+            0,
+            1
+          ],
+          "beat": [
+            8,
+            1
+          ],
+          "kind": "long_note",
+          "source_line": 5
+        }
+      ],
+      "long_notes": [],
+      "original_vb_pairing": "UpdatePairing marks same-position duplicate long endpoints as errors; the remaining unmatched endpoint in each affected column is also an error.",
+      "edit_expectation": "Invalid pairing is read-only; no complete-pair claim is made."
+    },
+    {
+      "file": "03-overlap-crossing-lanes.bms",
+      "description": "Two overlapping long intervals on P1/P2 long channels, with ordinary notes on the paired normal channels inside or on the intervals.",
+      "sha256": "b7bb66aeb027320451a759c62b5f4918712f22636e388c4fe1316af4bc4b20d3",
+      "byte_length": 121,
+      "chart_editable": false,
+      "long_notes_editable": false,
+      "events": [
+        {
+          "measure": 0,
+          "channel": "51",
+          "token": "10",
+          "fraction": [
+            0,
+            1
+          ],
+          "beat": [
+            0,
+            1
+          ],
+          "kind": "long_note",
+          "source_line": 2
+        },
+        {
+          "measure": 1,
+          "channel": "51",
+          "token": "01",
+          "fraction": [
+            0,
+            1
+          ],
+          "beat": [
+            4,
+            1
+          ],
+          "kind": "long_note",
+          "source_line": 3
+        },
+        {
+          "measure": 0,
+          "channel": "61",
+          "token": "10",
+          "fraction": [
+            1,
+            2
+          ],
+          "beat": [
+            2,
+            1
+          ],
+          "kind": "long_note",
+          "source_line": 4
+        },
+        {
+          "measure": 1,
+          "channel": "61",
+          "token": "ZZ",
+          "fraction": [
+            0,
+            1
+          ],
+          "beat": [
+            4,
+            1
+          ],
+          "kind": "long_note",
+          "source_line": 5
+        },
+        {
+          "measure": 0,
+          "channel": "11",
+          "token": "01",
+          "fraction": [
+            0,
+            4
+          ],
+          "beat": [
+            0,
+            1
+          ],
+          "kind": "normal_note",
+          "source_line": 6
+        },
+        {
+          "measure": 0,
+          "channel": "11",
+          "token": "01",
+          "fraction": [
+            1,
+            4
+          ],
+          "beat": [
+            1,
+            1
+          ],
+          "kind": "normal_note",
+          "source_line": 6
+        },
+        {
+          "measure": 0,
+          "channel": "21",
+          "token": "10",
+          "fraction": [
+            1,
+            4
+          ],
+          "beat": [
+            1,
+            1
+          ],
+          "kind": "normal_note",
+          "source_line": 7
+        }
+      ],
+      "long_notes": [
+        {
+          "channel": "51",
+          "encoding": "long_channel",
+          "start": {
+            "measure": 0,
+            "fraction": [
+              0,
+              1
+            ]
+          },
+          "end": {
+            "measure": 1,
+            "fraction": [
+              0,
+              1
+            ]
+          },
+          "start_token": "10",
+          "end_token": "01",
+          "start_beat": [
+            0,
+            1
+          ],
+          "end_beat": [
+            4,
+            1
+          ],
+          "start_source_line": 2,
+          "end_source_line": 3
+        },
+        {
+          "channel": "61",
+          "encoding": "long_channel",
+          "start": {
+            "measure": 0,
+            "fraction": [
+              1,
+              2
+            ]
+          },
+          "end": {
+            "measure": 1,
+            "fraction": [
+              0,
+              1
+            ]
+          },
+          "start_token": "10",
+          "end_token": "ZZ",
+          "start_beat": [
+            2,
+            1
+          ],
+          "end_beat": [
+            4,
+            1
+          ],
+          "start_source_line": 4,
+          "end_source_line": 5
+        }
+      ],
+      "original_vb_pairing": "Pairing is per editor column; the source rows overlap normal notes in the corresponding 11/21 columns, so SaveBMS/UpdatePairing reports overlap errors. Cross-column interval overlap is retained as separate lanes.",
+      "edit_expectation": "Raw endpoints remain observable while overlap diagnostics make the derived pair set read-only."
+    },
+    {
+      "file": "04-lnobj-marker-not-wav.bms",
+      "description": "Valid LNOBJ marker ZZ; ordinary note 01 is the head and ordinary token ZZ is the tail. #WAV01 is only a header declaration and is not a note event.",
+      "sha256": "9ef830ba73f316896cdb6354ec2aa3af362d0bb80ffd17e606e0c61068a99962",
+      "byte_length": 91,
+      "chart_editable": true,
+      "long_notes_editable": true,
+      "events": [
+        {
+          "measure": 0,
+          "channel": "11",
+          "token": "01",
+          "fraction": [
+            0,
+            1
+          ],
+          "beat": [
+            0,
+            1
+          ],
+          "kind": "normal_note",
+          "source_line": 3
+        },
+        {
+          "measure": 1,
+          "channel": "11",
+          "token": "ZZ",
+          "fraction": [
+            1,
+            2
+          ],
+          "beat": [
+            6,
+            1
+          ],
+          "kind": "normal_note",
+          "source_line": 4
+        },
+        {
+          "measure": 2,
+          "channel": "11",
+          "token": "01",
+          "fraction": [
+            0,
+            1
+          ],
+          "beat": [
+            8,
+            1
+          ],
+          "kind": "normal_note",
+          "source_line": 5
+        }
+      ],
+      "long_notes": [
+        {
+          "channel": "11",
+          "encoding": "lnobj",
+          "start": {
+            "measure": 0,
+            "fraction": [
+              0,
+              1
+            ]
+          },
+          "end": {
+            "measure": 1,
+            "fraction": [
+              1,
+              2
+            ]
+          },
+          "start_token": "01",
+          "end_token": "ZZ",
+          "start_beat": [
+            0,
+            1
+          ],
+          "end_beat": [
+            6,
+            1
+          ],
+          "start_source_line": 3,
+          "end_source_line": 4
+        }
+      ],
+      "original_vb_pairing": "ChartIO reads #LNOBJ as the base36 tail marker; UpdatePairing matches a nonnumeric-column marker token to the nearest preceding normal note. #WAV01 is separate metadata.",
+      "edit_expectation": "A validated LNOBJ pair is edited through the long-note API. An ordinary note outside the interval is allowed; insertion inside the interval or insertion of protected marker ZZ is rejected."
+    },
+    {
+      "file": "05-lntype-mixed-bom-edit-undo.bms",
+      "description": "UTF-8 BOM, CRLF/LF/CR mixed line endings, no final newline, #LNTYPE 1 without endpoints; ordinary long-mode edits are byte-history tested.",
+      "sha256": "0c7692008af65d844fd63547950eddd28c49642c83c9585966ae26ed1dc9539c",
+      "byte_length": 68,
+      "chart_editable": true,
+      "long_notes_editable": true,
+      "events": [
+        {
+          "measure": 0,
+          "channel": "11",
+          "token": "01",
+          "fraction": [
+            0,
+            1
+          ],
+          "beat": [
+            0,
+            1
+          ],
+          "kind": "normal_note",
+          "source_line": 2
+        },
+        {
+          "measure": 0,
+          "channel": "12",
+          "token": "01",
+          "fraction": [
+            1,
+            2
+          ],
+          "beat": [
+            2,
+            1
+          ],
+          "kind": "normal_note",
+          "source_line": 3
+        },
+        {
+          "measure": 0,
+          "channel": "13",
+          "token": "01",
+          "fraction": [
+            0,
+            1
+          ],
+          "beat": [
+            0,
+            1
+          ],
+          "kind": "normal_note",
+          "source_line": 4
+        }
+      ],
+      "long_notes": [],
+      "original_vb_pairing": "ChartIO selects LNTYPE 1 mode; with no long endpoints there is no pair to report.",
+      "edit_expectation": "insert_long_note followed by undo restores every original byte including BOM, mixed EOL, and missing final newline; redo reapplies a valid pair."
+    },
+    {
+      "file": "06-lnobj-duplicate-marker.bms",
+      "description": "LNOBJ ZZ with one valid head/tail followed by a second marker without a new head.",
+      "sha256": "2dbb243b64284a256210e93240e4327a60520c53c325931f88ed30f167c430b1",
+      "byte_length": 77,
+      "chart_editable": false,
+      "long_notes_editable": false,
+      "events": [
+        {
+          "measure": 0,
+          "channel": "11",
+          "token": "01",
+          "fraction": [
+            0,
+            1
+          ],
+          "beat": [
+            0,
+            1
+          ],
+          "kind": "normal_note",
+          "source_line": 2
+        },
+        {
+          "measure": 1,
+          "channel": "11",
+          "token": "ZZ",
+          "fraction": [
+            1,
+            2
+          ],
+          "beat": [
+            6,
+            1
+          ],
+          "kind": "normal_note",
+          "source_line": 3
+        },
+        {
+          "measure": 2,
+          "channel": "11",
+          "token": "ZZ",
+          "fraction": [
+            0,
+            1
+          ],
+          "beat": [
+            8,
+            1
+          ],
+          "kind": "normal_note",
+          "source_line": 4
+        }
+      ],
+      "long_notes": [
+        {
+          "channel": "11",
+          "encoding": "lnobj",
+          "start": {
+            "measure": 0,
+            "fraction": [
+              0,
+              1
+            ]
+          },
+          "end": {
+            "measure": 1,
+            "fraction": [
+              1,
+              2
+            ]
+          },
+          "start_token": "01",
+          "end_token": "ZZ",
+          "start_beat": [
+            0,
+            1
+          ],
+          "end_beat": [
+            6,
+            1
+          ],
+          "start_source_line": 2,
+          "end_source_line": 3
+        }
+      ],
+      "original_vb_pairing": "The second LNOBJ marker has no unambiguous preceding ordinary head; original UpdatePairing marks that marker as an error.",
+      "edit_expectation": "The partial view is diagnostic only and stays read-only; unsupported/ambiguous pairing is not treated as complete compatibility."
+    },
+    {
+      "file": "07-placement-guards.bms",
+      "description": "Two valid 51 pairs at beats 0-4 and 6-8; insertion of a nested 1-2 pair and resizing the first pair past the neighbor must be atomic rejections.",
+      "sha256": "6fd6d6e8d592188865d77b8f618ce00b0b899f00e8efc911f9856965fd48d768",
+      "byte_length": 70,
+      "chart_editable": true,
+      "long_notes_editable": true,
+      "events": [
+        {
+          "measure": 0,
+          "channel": "51",
+          "token": "01",
+          "fraction": [
+            0,
+            1
+          ],
+          "beat": [
+            0,
+            1
+          ],
+          "kind": "long_note",
+          "source_line": 2
+        },
+        {
+          "measure": 1,
+          "channel": "51",
+          "token": "01",
+          "fraction": [
+            0,
+            1
+          ],
+          "beat": [
+            4,
+            1
+          ],
+          "kind": "long_note",
+          "source_line": 3
+        },
+        {
+          "measure": 1,
+          "channel": "51",
+          "token": "01",
+          "fraction": [
+            1,
+            2
+          ],
+          "beat": [
+            6,
+            1
+          ],
+          "kind": "long_note",
+          "source_line": 3
+        },
+        {
+          "measure": 2,
+          "channel": "51",
+          "token": "01",
+          "fraction": [
+            0,
+            1
+          ],
+          "beat": [
+            8,
+            1
+          ],
+          "kind": "long_note",
+          "source_line": 4
+        }
+      ],
+      "long_notes": [
+        {
+          "channel": "51",
+          "encoding": "long_channel",
+          "start": {
+            "measure": 0,
+            "fraction": [
+              0,
+              1
+            ]
+          },
+          "end": {
+            "measure": 1,
+            "fraction": [
+              0,
+              1
+            ]
+          },
+          "start_token": "01",
+          "end_token": "01",
+          "start_beat": [
+            0,
+            1
+          ],
+          "end_beat": [
+            4,
+            1
+          ],
+          "start_source_line": 2,
+          "end_source_line": 3
+        },
+        {
+          "channel": "51",
+          "encoding": "long_channel",
+          "start": {
+            "measure": 1,
+            "fraction": [
+              1,
+              2
+            ]
+          },
+          "end": {
+            "measure": 2,
+            "fraction": [
+              0,
+              1
+            ]
+          },
+          "start_token": "01",
+          "end_token": "01",
+          "start_beat": [
+            6,
+            1
+          ],
+          "end_beat": [
+            8,
+            1
+          ],
+          "start_source_line": 3,
+          "end_source_line": 4
+        }
+      ],
+      "original_vb_pairing": "Sequential same-column endpoints form 0-4 and 6-8; a new 1-2 insertion would change that sequence and must be rejected rather than silently repartitioning it.",
+      "edit_expectation": "Nested insertion and resize across the neighboring pair leave bytes and history unchanged."
+    },
+    {
+      "file": "08-single-pair-move.bms",
+      "description": "One 51 pair from beat 0 to beat 4, with different endpoint tokens, for whole-pair movement to beats 4-8.",
+      "sha256": "d709a7adaa6073449711f31ab4e5855231de3e0346954c7083cb8073dd774eb9",
+      "byte_length": 58,
+      "chart_editable": true,
+      "long_notes_editable": true,
+      "events": [
+        {
+          "measure": 0,
+          "channel": "51",
+          "token": "01",
+          "fraction": [
+            0,
+            1
+          ],
+          "beat": [
+            0,
+            1
+          ],
+          "kind": "long_note",
+          "source_line": 2
+        },
+        {
+          "measure": 1,
+          "channel": "51",
+          "token": "ZZ",
+          "fraction": [
+            0,
+            1
+          ],
+          "beat": [
+            4,
+            1
+          ],
+          "kind": "long_note",
+          "source_line": 3
+        }
+      ],
+      "long_notes": [
+        {
+          "channel": "51",
+          "encoding": "long_channel",
+          "start": {
+            "measure": 0,
+            "fraction": [
+              0,
+              1
+            ]
+          },
+          "end": {
+            "measure": 1,
+            "fraction": [
+              0,
+              1
+            ]
+          },
+          "start_token": "01",
+          "end_token": "ZZ",
+          "start_beat": [
+            0,
+            1
+          ],
+          "end_beat": [
+            4,
+            1
+          ],
+          "start_source_line": 2,
+          "end_source_line": 3
+        }
+      ],
+      "original_vb_pairing": "The source pair is one same-column interval; writeback retains its two endpoint values while changing both positions.",
+      "edit_expectation": "Moving the complete pair to 4-8 succeeds, vacates the old endpoints, and preserves endpoint tokens."
+    }
+  ]
+}

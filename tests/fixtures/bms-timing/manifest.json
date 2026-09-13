@@ -1,0 +1,481 @@
+{
+  "schema": "bms-timing-fixture-manifest-v1",
+  "scope": "synthetic no-asset timing fixtures; playback profile is explicit and bounded",
+  "source_profile": {
+    "legacy_vb": {
+      "initial_bpm": "120",
+      "refs": [
+        "iBMSC/iBMSC/ChartIO.vb:17-28",
+        "iBMSC/iBMSC/ChartIO.vb:45-64",
+        "iBMSC/iBMSC/ChartIO.vb:199-205",
+        "iBMSC/iBMSC/MainWindow.vb:1272-1282",
+        "iBMSC/iBMSC/MainWindow.vb:2281-2327"
+      ],
+      "stop_units": "raw STOP value / 48 quarter-beats; VB query uses value/10000 then /48",
+      "known_query_caveat": "GetTimeFromVPosition can integrate a future BPM segment before the query because it uses the next BPM note as duration without clamping; this corpus uses the corrected current timeline and tests a query before a future BPM.",
+      "urls": {
+        "repository": "https://github.com/zardoru/iBMSC/tree/f5b21d1de50ce28202d1b2e8d2f614fabde18092",
+        "chartio": "https://github.com/zardoru/iBMSC/blob/f5b21d1de50ce28202d1b2e8d2f614fabde18092/iBMSC/ChartIO.vb",
+        "mainwindow": "https://github.com/zardoru/iBMSC/blob/f5b21d1de50ce28202d1b2e8d2f614fabde18092/iBMSC/MainWindow.vb"
+      }
+    },
+    "beatoraja_derived_playback": {
+      "commit": "e19bcc21c8d4c85d7791ff8d31d73c1cb1ea5d27",
+      "refs": [
+        "/tmp/ibms-timing-jbms-parser/src/bms/model/Section.java:66-145",
+        "/tmp/ibms-timing-jbms-parser/src/bms/model/Section.java:296-310",
+        "/tmp/ibms-timing-jbms-parser/src/bms/model/Section.java:535-551",
+        "/tmp/ibms-timing-jbms-parser/src/bms/model/BMSDecoder.java:313-325"
+      ],
+      "rules": [
+        "03 and 08 write into one BPM position map; later source row at the same fraction wins",
+        "09 writes into a STOP position map; later source row at the same fraction wins; duplicate STOP values are not summed",
+        "at an equal beat, BPM is applied before STOP timing is calculated",
+        "STOP raw value / 192 measures = raw value / 48 quarter-beats; seconds use 60/BPM per quarter-beat",
+        "a query exactly at a STOP beat reports arrival before that STOP; a later query includes the stop"
+      ],
+      "urls": {
+        "repository": "https://github.com/exch-bms2/jbms-parser/tree/e19bcc21c8d4c85d7791ff8d31d73c1cb1ea5d27",
+        "section": "https://github.com/exch-bms2/jbms-parser/blob/e19bcc21c8d4c85d7791ff8d31d73c1cb1ea5d27/src/bms/model/Section.java",
+        "decoder": "https://github.com/exch-bms2/jbms-parser/blob/e19bcc21c8d4c85d7791ff8d31d73c1cb1ea5d27/src/bms/model/BMSDecoder.java"
+      }
+    },
+    "limit": "This is a documented playback profile, not binary equivalence to a bundled jar or a claim that the VB editor is a playback engine. The newer master parser version is not asserted identical."
+  },
+  "query_contract": {
+    "beat": "Exact absolute quarter-beat from measure ratio and row fraction.",
+    "seconds": "Arrival time at the query beat. A STOP at exactly that beat is excluded from that query and included when advancing beyond it.",
+    "bpm": "Initial 120; BPM changes at a beat affect following beat travel and STOP duration at that beat.",
+    "ordering": "Last source definition at the same fraction wins within the BPM or STOP position map. 03 has no priority over 08; STOP entries are not summed."
+  },
+  "fixtures": [
+    {
+      "filename": "01-default-bpm.bms",
+      "byte_length": 59,
+      "sha256": "a8e71d8a502bf38c483b1a7c29246a17e5cfbefc0bb0357e1e282d7361dbe6c7",
+      "description": "Default 120 BPM and ordinary beat queries.",
+      "expected_queries": [
+        [
+          "0",
+          "0"
+        ],
+        [
+          "4",
+          "2"
+        ],
+        [
+          "5",
+          "5/2"
+        ]
+      ],
+      "expected_timing_events": [],
+      "has_assets": false
+    },
+    {
+      "filename": "02-ratio-future-bpm-stop.bms",
+      "byte_length": 118,
+      "sha256": "dd7f7de87d87a075729bd97fbcba75a10057dde0222d4405e87044f4cdb00a4b",
+      "description": "Ratios 0.5 and 1.5, future BPM query, extended BPM, and STOP.",
+      "expected_queries": [
+        [
+          "3",
+          "3/2"
+        ],
+        [
+          "4",
+          "2"
+        ],
+        [
+          "5",
+          "9/4"
+        ],
+        [
+          "6",
+          "5/2"
+        ],
+        [
+          "7",
+          "3"
+        ],
+        [
+          "12",
+          "17/4"
+        ]
+      ],
+      "expected_timing_events": [
+        {
+          "channel": "08",
+          "measure": 1,
+          "fraction": "0",
+          "beat": "4",
+          "resource": "01",
+          "bpm": "240"
+        },
+        {
+          "channel": "09",
+          "measure": 2,
+          "fraction": "0",
+          "beat": "6",
+          "resource": "01",
+          "raw_stop": "48",
+          "stop_quarterbeats": "1"
+        }
+      ],
+      "has_assets": false
+    },
+    {
+      "filename": "03-stop-same-beat.bms",
+      "byte_length": 68,
+      "sha256": "a46b7a5a9a93bce6abd74b0db415f57ad3302cf0a97795bbd5993d798467fffb",
+      "description": "STOP at measure start and query exactly at, then after, the STOP beat.",
+      "expected_queries": [
+        [
+          "4",
+          "2"
+        ],
+        [
+          "5",
+          "7/2"
+        ]
+      ],
+      "expected_timing_events": [
+        {
+          "channel": "09",
+          "measure": 1,
+          "fraction": "0",
+          "beat": "4",
+          "resource": "01",
+          "raw_stop": "96",
+          "stop_quarterbeats": "2"
+        }
+      ],
+      "has_assets": false
+    },
+    {
+      "filename": "04-same-beat-order.bms",
+      "byte_length": 157,
+      "sha256": "16808be5ee0111a15ec124e631b564b403b666c8cd1a0aec55d7f499c579102b",
+      "description": "同一 beat 的 BPM 与 STOP、重复 STOP，以及两个 beat 上反转的 03/08 源行顺序。",
+      "expected_queries": [
+        [
+          "3",
+          "3/2"
+        ],
+        [
+          "4",
+          "2"
+        ],
+        [
+          "4",
+          "after_stop",
+          "12/5"
+        ],
+        [
+          "5",
+          "13/5"
+        ]
+      ],
+      "expected_timing_events": [
+        {
+          "channel": "08",
+          "measure": 0,
+          "fraction": "0",
+          "beat": "0",
+          "resource": "01",
+          "bpm": "240"
+        },
+        {
+          "channel": "03",
+          "measure": 0,
+          "fraction": "0",
+          "beat": "0",
+          "token": "78",
+          "bpm": "120"
+        },
+        {
+          "channel": "09",
+          "measure": 1,
+          "fraction": "0",
+          "beat": "4",
+          "resource": "01",
+          "raw_stop": "48",
+          "stop_quarterbeats": "1"
+        },
+        {
+          "channel": "09",
+          "measure": 1,
+          "fraction": "0",
+          "beat": "4",
+          "resource": "02",
+          "raw_stop": "96",
+          "stop_quarterbeats": "2"
+        },
+        {
+          "channel": "03",
+          "measure": 1,
+          "fraction": "0",
+          "beat": "4",
+          "token": "96",
+          "bpm": "150"
+        },
+        {
+          "channel": "08",
+          "measure": 1,
+          "fraction": "0",
+          "beat": "4",
+          "resource": "02",
+          "bpm": "300"
+        }
+      ],
+      "ordering_expectation": "beat 0 的 03 行位于 08 行之后，故有效 BPM 为 120；beat 4 的 08 行位于 03 行之后，故有效 BPM 为 300。STOP02 位于同拍最后一个 STOP 源行，raw STOP=96；同拍先应用 BPM=300，再计算 STOP 时长。",
+      "has_assets": false,
+      "source_order_expectation": "03 与 08 的优先级不由频道号决定；在各自 beat 上都按同类事件的最后源行选取。"
+    },
+    {
+      "filename": "05-invalid-numeric-undefined.bms",
+      "byte_length": 127,
+      "sha256": "02ea888090939ed61a7031fb84234839decda91f990c4e00f351380b1457d763",
+      "description": "Invalid numeric definitions, undefined extended references, and invalid hex BPM token.",
+      "expected_queries": [],
+      "expected_timing_events": [],
+      "uncertainty": "VB Val() turns invalid numeric definitions into zero without an explicit diagnostic in ChartIO; diagnostic wording and whether zero-valued definitions are accepted belong to the new core contract.",
+      "has_assets": false,
+      "expected_diagnostics_nonempty": true
+    },
+    {
+      "filename": "06-shared-resources.bms",
+      "byte_length": 117,
+      "sha256": "366c1c7712a0bd715f3eb1b3f5c4aae5302368ed821e4605b9e7ced681bee6ce",
+      "description": "The same BPM and STOP resources are reused at two beats; no media assets.",
+      "expected_queries": [
+        [
+          "0",
+          "0"
+        ],
+        [
+          "4",
+          "5/3"
+        ],
+        [
+          "5",
+          "7/3"
+        ]
+      ],
+      "expected_timing_events": [
+        {
+          "channel": "08",
+          "resource": "01",
+          "bpm": "180",
+          "beats": [
+            "0",
+            "4"
+          ]
+        },
+        {
+          "channel": "09",
+          "resource": "01",
+          "raw_stop": "48",
+          "stop_quarterbeats": "1",
+          "beats": [
+            "0",
+            "4"
+          ]
+        }
+      ],
+      "shared_resource_expectation": "One logical BPM01 and STOP01 definition is reused; the test must not require duplicated asset-like objects.",
+      "has_assets": false
+    },
+    {
+      "filename": "07-runtime-resource-exhaustion-seed.bms",
+      "byte_length": 78,
+      "sha256": "3a6a0df629db98c50a1762c0e5b64a5245339240b63546da5b8e8bcaf29964b7",
+      "description": "Small checked-in seed for a runtime-generated 1296-entry BPM/STOP resource stress input.",
+      "expected_queries": [
+        [
+          "0",
+          "0"
+        ]
+      ],
+      "expected_timing_events": [
+        {
+          "channel": "08",
+          "resource": "01",
+          "bpm": "120"
+        },
+        {
+          "channel": "09",
+          "resource": "01",
+          "raw_stop": "48"
+        }
+      ],
+      "runtime_stress": "The C++ test generates 1296 synthetic BPM and STOP definitions in memory; no large media assets are checked in. Expected result is bounded parsing without throw or unbounded growth.",
+      "has_assets": false
+    },
+    {
+      "filename": "08-bom-case-insensitive.bms",
+      "byte_length": 53,
+      "sha256": "750a054561c2da011a301d4d3c42a290193ecb6ba8ff82085f4a6fddc81b5285",
+      "description": "UTF-8 BOM 后带缩进的大小写不敏感初始 BPM、扩展 STOP 引用和 CRLF 行。",
+      "expected_queries": [
+        [
+          "0",
+          "0"
+        ],
+        [
+          "0",
+          "after_stop",
+          "1"
+        ],
+        [
+          "1",
+          "2"
+        ]
+      ],
+      "expected_timing_events": [
+        {
+          "channel": "09",
+          "measure": 0,
+          "fraction": "0",
+          "beat": "0",
+          "resource": "A1",
+          "raw_stop": "48",
+          "stop_quarterbeats": "1"
+        }
+      ],
+      "expected_initial_bpm": "60",
+      "has_assets": false,
+      "edge_expectations": [
+        "BOM 后空格仍识别 #bpm 60",
+        "#stopa1 48 使用大小写不敏感的 A1 引用",
+        "BOM 和原始 CRLF 字节必须保留"
+      ]
+    },
+    {
+      "filename": "09-malformed-timing-lines.bms",
+      "byte_length": 71,
+      "sha256": "bc30d68d32b3d0b3a1481f23379488176d784700b4a41bf65a36b35f8499f509",
+      "description": "损坏的 03、08、02 行；不得跳过后回退为可用默认时间线。",
+      "expected_availability": false,
+      "expected_queries": [],
+      "expected_timing_events": [],
+      "has_assets": false,
+      "expected_diagnostics_nonempty": true
+    },
+    {
+      "filename": "10-zero-stop.bms",
+      "byte_length": 48,
+      "sha256": "1e2751d277ba860e8035a8344f6af84c4797f242ee91aead52667f4adcda067b",
+      "description": "数值为 0 的 STOP 定义；定义有效且不增加停顿。",
+      "expected_initial_bpm": "120",
+      "expected_queries": [
+        [
+          "0",
+          "0"
+        ],
+        [
+          "0",
+          "after_stop",
+          "0"
+        ],
+        [
+          "1",
+          "1/2"
+        ]
+      ],
+      "expected_timing_events": [
+        {
+          "channel": "09",
+          "measure": 0,
+          "fraction": "0",
+          "beat": "0",
+          "resource": "01",
+          "raw_stop": "0",
+          "stop_quarterbeats": "0"
+        }
+      ],
+      "has_assets": false
+    },
+    {
+      "filename": "11-base62-unavailable.bms",
+      "byte_length": 45,
+      "sha256": "6a67fd12c7f0e9a240275756ee72b0a2803b653ae42c70284c27f1a64b57751b",
+      "description": "明确声明 #BASE 62；本批只支持 Base36，因此时间线不可用。",
+      "expected_availability": false,
+      "expected_queries": [],
+      "expected_timing_events": [],
+      "has_assets": false,
+      "expected_diagnostics_nonempty": true
+    },
+    {
+      "filename": "12-measure-overflow.bms",
+      "byte_length": 72,
+      "sha256": "c48fcb8a8ae47b52a03c18049de7472e0a115583d668639b0c1734485c5b43de",
+      "description": "极大 measure ratio 触发可表示 BeatPosition 范围溢出；读取应返回不可用诊断且不抛异常。",
+      "expected_availability": false,
+      "expected_queries": [],
+      "expected_timing_events": [],
+      "has_assets": false,
+      "expected_diagnostics_nonempty": true
+    },
+    {
+      "filename": "13-tiny-stop.bms",
+      "byte_length": 66,
+      "sha256": "e79a890dd5ab6d70ec731a46fb3a0ce1448a4c6c0c432ac974a84b2fd93df1e1",
+      "description": "18 位小数的正 STOP；应保持有限、正的极小秒数，而不是因 /48 的有理数分母溢出而失败。",
+      "expected_initial_bpm": "60",
+      "expected_queries": [
+        [
+          "0",
+          "0"
+        ],
+        [
+          "0",
+          "after_stop",
+          "tiny-positive"
+        ],
+        [
+          "1",
+          "approximately-1"
+        ]
+      ],
+      "expected_timing_events": [
+        {
+          "channel": "09",
+          "measure": 0,
+          "fraction": "0",
+          "beat": "0",
+          "resource": "01",
+          "raw_stop": "0.000000000000000001",
+          "stop_quarterbeats": "1/48000000000000000000"
+        }
+      ],
+      "has_assets": false
+    },
+    {
+      "filename": "14-empty-initial-bpm.bms",
+      "byte_length": 50,
+      "sha256": "801a661f413dcf78201a5149fc6332e2cace5439d2b43a8b47688d0f243b94d0",
+      "description": "空的 #BPM 与仅空格的 #BPM；不能静默采用初始 120 BPM。",
+      "expected_availability": false,
+      "expected_queries": [],
+      "expected_timing_events": [],
+      "has_assets": false,
+      "expected_diagnostics_nonempty": true
+    }
+  ],
+  "edge_cases": {
+    "empty_initial_bpm": [
+      "#BPM",
+      "#BPM   "
+    ],
+    "bom_whitespace_initial_bpm": "BOM followed by horizontal spaces and #bpm 60 must still be recognized",
+    "tiny_stop": "A positive decimal STOP smaller than one quarter-beat remains available and seconds remain finite",
+    "malformed_rows": [
+      "#00003",
+      "#00008:",
+      "#00002:bad"
+    ],
+    "unsupported_base": "#BASE 62 makes timing unavailable",
+    "overflow": "An enormous ratio/event beat makes timing unavailable without an exception"
+  }
+}

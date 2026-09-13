@@ -1,0 +1,9 @@
+{
+  "version": "1.0.0",
+  "info": {
+    "title": "Extra",
+    "banner": "bn.png",
+    "field_1": "14:00 2015/11/14",
+    "field_2": [0, 240, 480]
+  }
+}

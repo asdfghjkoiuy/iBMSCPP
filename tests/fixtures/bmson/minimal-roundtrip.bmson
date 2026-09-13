@@ -1,0 +1,21 @@
+{
+  "version": "1.0.0",
+  "info": {
+    "title": "Demo",
+    "initBPM": 140
+  },
+  "lines": [
+    { "y": 240 }
+  ],
+  "bpmNotes": [
+    { "y": 0, "v": 140 }
+  ],
+  "soundChannels": [
+    {
+      "name": "kick.wav",
+      "notes": [
+        { "x": 1, "y": 0, "l": 0, "c": false }
+      ]
+    }
+  ]
+}

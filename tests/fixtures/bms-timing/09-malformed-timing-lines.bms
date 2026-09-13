@@ -1,0 +1,6 @@
+#TITLE Malformed timing
+#BPM 120
+#00003
+#00008:
+#00002:bad
+#00011:0100
