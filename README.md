@@ -1,73 +1,69 @@
 # iBMSCPP
 
-**iBMSCPP**（μBMSC Editor / IBMSNative）是一体化的 BMS / BMSON 谱面编辑器。谱面模型、拍号运算、时序和音频解码放在 C++20 核心库里；macOS 上的完整应用用 AppKit 组织窗口，用 Metal 绘制谱面，用 Core Audio 播放预览。
+**iBMSCPP**（应用名 **μBMSC Editor** / `IBMSNative`）是一款面向 macOS 的原生 BMS / BMSON 音游制谱软件。底层采用跨平台 C++20 核心库处理精确拍号分数、时序计算、谱面读写与音频解码；前端基于 AppKit、Metal 与 Core Audio 构建，提供高帧率谱面编辑与低延迟音画预览。
 
-它把四款经典工具里可以观察到的能力收进同一个原生软件：
+传统 BMS 制谱往往需要在多个年代久远的工具之间来回切换。本项目将四款经典制谱工具完整整合进**同一个软件**中：
 
-- **iBMSC / µBMSC**
-- **BmsONE**
-- **Be-Music Helper（bmhelper）**
-- **woslicer II / III**
+- **iBMSC / µBMSC**：主谱面编辑器、NT 长音模式、时间选择变速、MyO2 工具箱與主题系统
+- **BmsONE**：原生 `.bmson` 编辑、声道分轨视图、主控混音预览与整曲 WAV 导出
+- **Be-Music Helper（bmhelper）**：MIDI 导入自动聚类、`#WAV` 定义生成与 Division 时间线管理
+- **woslicer II / III**：波形裁断线切音、片段试听与 BMSE 剪贴板序列生成
+- **uBMplay 风格内置预览器**：无需配置外部播放器，直接按 `F5` / `F6` 呼出独立窗口，同步预览下落式谱面、BGA 图层/视频（含 WMV / MP4）与 48 kHz 高精度混音
 
-首次启动时界面为简体中文。下文先写中文菜单名，括号里是英文原文，便于对照英文界面和源码。
+---
 
 ## 目录
 
-- [项目简介](#项目简介)
-- [设计理念](#设计理念)
+- [功能特性](#功能特性)
 - [环境要求](#环境要求)
-- [构建与测试](#构建与测试)
+- [构建与运行](#构建与运行)
 - [使用指南](#使用指南)
-- [仓库目录](#仓库目录)
+  - [1. 打开、新建与格式转换](#1-打开新建与格式转换)
+  - [2. 主编辑器常用操作](#2-主编辑器常用操作)
+  - [3. 内置预览器（uBMplay 风格）](#3-内置预览器ubmplay-风格)
+  - [4. 音频切片器（woslicer / bmhelper 二合一）](#4-音频切片器woslicer--bmhelper-二合一)
+  - [5. MIDI 制谱助手（Be-Music Helper）](#5-midi-制谱助手be-music-helper)
+  - [6. BMSON 专属工作流](#6-bmson-专属工作流)
+  - [7. MyO2 工具箱与批量变速](#7-myo2-工具箱与批量变速)
+- [目录结构](#目录结构)
 
-## 项目简介
+---
 
-主程序是一扇编辑器窗口，同时原生支持 BMS 与 BMSON 两套模型。可以打开、新建和保存的谱面包括：
+## 功能特性
 
-| 格式 | 扩展名 | 在本程序中的位置 |
-| --- | --- | --- |
-| BMS | `.bms`、`.bme`、`.bml`、`.pms` | 原生读写 |
-| BMSON | `.bmson` | 原生读写 |
-| iBMSC 工程 | `.ibmsc` | 导入与导出 |
-| StepMania | `.sm` | 导入 |
+- **一套主界面同时编辑 BMS 与 BMSON**：底层严格区分 BMS 与 BMSON 数据模型，不互相硬套；上层共用同一套 Metal 谱面视图、点选、写入、框选、缩放、查找替换与撤销栈。
+- **支持主流谱面与工程格式**：
+  - 原生读写：`.bms`、`.bme`、`.bml`、`.pms`、`.bmson`
+  - 工程导入与导出：`.ibmsc`（支持保留 Undo 历史、扩展区与界面偏好）
+  - 外部谱面导入：`.sm`（StepMania 谱面导入）、BMS 转 BMSON 向导（支持编码选择、`#RANDOM` 分支展开与 5K/7K/10K/14K/PMS 键位映射）
+- **开箱即用的内置音画预览**：
+  - 按 `F5`（从头播放）或 `F6`（从当前位置播放）即刻试玩，支持 `0.50`–`5.00` 共 19 档 HiSpeed 与 `0.25x`–`4.00x` 共 16 档倍速播放（自动带限重采样变调）。
+  - 原生支持 BMP / PNG / JPG / GIF 静态与序列图层，以及 WMV / ASF / MP4 等 BGA 视频同步解码与色键抠像。
+- **内置完整切音与 MIDI 辅助链**：从 MIDI 分轨聚类、音频切片导出到谱面排布，全程在一个应用内闭环完成。
 
-预览也在这个软件里完成。内置预览器按 uBMplay 的非模态窗口来做：Metal 谱面、BGA 图层，以及 WMV / MP4 视频，配上 48 kHz 分组带限重采样混音。打开预览就能同时看谱、看 BGA、听声音。
-
-## 设计理念
-
-原则是「一个软件，不是四套窗」。BmsONE、bmhelper、woslicer 都挂在同一套主界面上，各自保留原来的算法和独有对话框，不再各开一扇主程序窗。
-
-### 同一套主编辑器
-
-时间线、Metal 谱面、点选、写入、缩放、滚动和内置预览共用一套前端。底层按文件类型走 BMS 或 BMSON 模型，显示和操作保持同一套。
-
-### 同类功能共用前端
-
-同一种工作共用一个窗口，算法按模式切换。音频切片器就是这样：一个 Audio Slicer 窗口，左上角 **Cut points** 在 `woslicer` 与 `bmhelper` 之间切换。`woslicer` 用裁断线；`bmhelper` 用 Division 时间线切分。写出的都是同一路 16-bit PCM。
-
-### 内置 uBMplay 风格预览
-
-预览窗口独立于主编辑器，非模态。谱面用 Metal 绘制，BGA 走图层以及 WMV / MP4，声音由分组带限重采样混音引擎以 48 kHz 输出。皮肤图集使用仓库内置的 uBMplay 1.5.2 资源（`macos/Resources/UbmplayReference/ubmplay_152.zip`）。
+---
 
 ## 环境要求
 
-- **macOS 14.0 及以上。** 完整应用 `IBMSNative.app` 需要 Xcode 或 Command Line Tools，以及 Swift 与 Metal。部署目标在根目录 `CMakeLists.txt` 里定为 14.0。
-- **CMake 3.26 及以上**，以及 **Ninja**。
-- **支持 `__int128` 的 C++20 编译器**，例如 Apple Clang 或 GCC。配置阶段会编译一段探测程序；编译器没有 `__int128` 时，配置直接失败。只构建跨平台核心 `ibms_core` 时，可以在非 macOS 环境使用 `core-debug` 或 `core-release` 预设。
-- **第三方依赖随仓库提供，或在构建时静态编译**，不需要再安装这些动态库：
-  - `stb_vorbis`（`third_party/stb/stb_vorbis.c`）
-  - `minimp3`（`third_party/minimp3`）
-  - `libsamplerate` 0.2.2（`third_party/libsamplerate`，2-clause BSD，见该目录 `COPYING`）
-  - 用于 WMV / ASF 的 LGPL 静态 FFmpeg 7.1.1。构建脚本、许可证和重新链接步骤在 `third_party/ffmpeg-lgpl/`（`build-static.sh`、`COPYING.LGPLv2.1`、`RELINK.txt`）
-  - uBMplay 1.5.2 皮肤图集，随 macOS 资源一起打包
+1. **完整 macOS 桌面应用（`IBMSNative.app`）**
+   - **系统版本**：macOS 14.0（Sonoma）或更高版本
+   - **开发工具**：Xcode 15+ 或 Xcode Command Line Tools（需包含 Swift 编译器、Apple Clang 与 Metal 工具链）
+   - **构建工具**：CMake `3.26` 及以上、Ninja
+2. **仅编译跨平台 C++ 核心库（`ibms_core`）**
+   - 任何支持 C++20 及 `__int128` 的 Clang 或 GCC 环境（macOS / Linux）
+3. **第三方依赖**
+   - 仓库已内置所需音频与重采样源码（`minimp3`、`stb_vorbis`、`libsamplerate` 0.2.2）以及 uBMplay 1.5.2 皮肤资源，无需通过 Homebrew 额外安装运行时动态库。
+   - 用于 WMV / ASF 视频解码的最小化 LGPL FFmpeg 静态库会在首次构建时由 `third_party/ffmpeg-lgpl/build-static.sh` 自动拉取并静态编译。
 
-## 构建与测试
+---
 
-以下命令都在仓库根目录执行。CMake Presets 使用 Ninja，并打开测试。
+## 构建与运行
 
-### 使用 CMake Presets
+在仓库根目录下打开终端，执行以下命令即可完成编译。
 
-Release：
+### 方式一：使用 CMake Presets（推荐）
+
+编译 **Release** 版本并运行测试：
 
 ```bash
 cmake --preset release
@@ -75,7 +71,13 @@ cmake --build --preset release
 ctest --preset release
 ```
 
-Debug：
+编译完成后，直接启动 macOS 应用：
+
+```bash
+open out/build/release/macos/IBMSNative.app
+```
+
+如果需要调试符号，可使用 `debug` 预设（产物位于 `out/build/debug/macos/IBMSNative.app`）：
 
 ```bash
 cmake --preset debug
@@ -83,32 +85,7 @@ cmake --build --preset debug
 ctest --preset debug
 ```
 
-应用包：
-
-- Release：`out/build/release/macos/IBMSNative.app`
-- Debug：`out/build/debug/macos/IBMSNative.app`
-
-启动 Release 包：
-
-```bash
-open out/build/release/macos/IBMSNative.app
-```
-
-`release` 与 `debug` 的测试预设已打开「失败时打印输出」。Ninja 会按本机核心数并行编译。
-
-### 只构建 C++ 核心
-
-这个预设设置 `IBMS_BUILD_MACOS_APP=OFF`，只编译 `ibms_core` 和核心测试，不生成 macOS 界面。非 macOS 环境用这一组。
-
-```bash
-cmake --preset core-release
-cmake --build --preset core-release
-ctest --preset core-release
-```
-
-调试构建把预设名换成 `core-debug`，目录为 `out/build/core-debug`。Release 核心的目录是 `out/build/core-release`。
-
-### 自定义构建目录
+### 方式二：自定义构建目录
 
 ```bash
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
@@ -116,111 +93,154 @@ cmake --build build -j8
 ctest --test-dir build --output-on-failure -j4
 ```
 
-在 macOS 上，此方式的应用包位于 `build/macos/IBMSNative.app`。
+使用该方式时，生成的应用位于 `build/macos/IBMSNative.app`：
+
+```bash
+open build/macos/IBMSNative.app
+```
+
+### 方式三：仅编译跨平台 C++ 核心与单元测试
+
+在非 macOS 环境，或只需验证底层 C++20 核心库（`ibms_core`）时，可使用 `core-release` 或 `core-debug` 预设：
+
+```bash
+cmake --preset core-release
+cmake --build --preset core-release
+ctest --preset core-release
+```
+
+---
 
 ## 使用指南
 
-功能键若被系统占用，`F1`–`F7` 需要同时按 `Fn`。紧凑键盘上的 Page Up、Page Down、Home、End 也按系统的 `Fn` 组合键。
+> **提示**：应用首次启动默认为简体中文界面（可在顶栏或工具栏 `Language` 菜单中切换语言，在 `Options → Theme` 中切换编辑器配色主题）。若 macOS 系统将顶排按键默认设为媒体功能键，按 `F1`–`F7` 时请配合 `Fn` 键使用。
 
-### 打开与新建谱面
+### 1. 打开、新建与格式转换
 
-- **文件 → 新建**（File → New），**文件 → 打开…**（File → Open…）：新建或打开 `.bms`、`.bme`、`.bml`、`.pms`、`.bmson`、`.ibmsc`、`.sm`。也可以把文件拖进主窗口。
-- **窗口 → BmsONE**（Window → BmsONE）：在当前主编辑器里新建一张空白 `.bmson`。
-- **文件 → 将 BMS 导入为 BMSON…**（File → Import BMS as BMSON…）：按 BmsONE 的规则导入，包括文本编码、`RANDOM` 分支，以及 5K / 7K / 10K / 14K / PMS 键位模式。
-- 另有 **从 .SM 文件导入**、**从 .IBMSC 文件导入**，以及 **导出 .IBMSC 文件**。
+- **新建 / 打开谱面**：通过菜单 **文件 → 新建**（`Cmd + N`）或 **文件 → 打开…**（`Cmd + O`），也可直接将 `.bms`、`.bme`、`.bml`、`.pms`、`.bmson`、`.ibmsc`、`.sm` 文件拖入主窗口。
+- **新建空白 BMSON**：点击菜单 **窗口 → BmsONE**，主编辑器将直接切换为新建的空白 `.bmson` 工程。
+- **将 BMS 转为 BMSON**：点击 **文件 → 将 BMS 导入为 BMSON…**，按向导选择文本编码、`#RANDOM` 分支值和键位模式即可完成转换。
+- **导入 / 导出工程**：在 **文件** 菜单下可执行 `.sm` 导入，以及 `.ibmsc` 工程文件的导入与导出。
 
-### 主编辑器
+### 2. 主编辑器常用操作
 
-编辑模式在 **编辑** 菜单里，也有对应的工具栏按钮：
+#### 工具模式切换
 
-| 按键 | 菜单 | 作用 |
+可通过顶部工具栏或快捷键随时切换三种编辑工具：
+
+| 快捷键 | 工具名称 | 用途 |
 | --- | --- | --- |
-| `F1` | 时间选择工具（Time Selection Tool） | 时间选择 |
-| `F2` | 选择工具（Select Tool） | 选择 |
-| `F3` | 写入工具（Write Tool） | 写入 |
+| `F1` | **时间选择工具**（Time Selection） | 划定时间区间，用于整体变速、拉伸或转为 STOP |
+| `F2` | **选择工具**（Select） | 点选、框选、拖动、复制或修改已有音符 |
+| `F3` | **写入工具**（Write） | 在轨道上点击写入新音符、长条或 BPM / STOP / BGA 事件 |
 
-选择与编辑：
+#### 音符编辑与快捷键
 
-- 左键点选或框选音符，拖动可移动已选音符。按住 `Ctrl` 拖动则复制已选音符。
-- 写入模式下，左键写入当前选中的 `#WAV` / `#BMP` 槽位。按住 `Ctrl` 写隐藏音符（Hidden）。按住 `Ctrl` + `Shift` 写地雷音符（Mine）。
-- 右键单击音符，删除该音符。`Shift` + 右键吸取该音符对应的侧栏 WAV 槽位。双击音符，修改标签，或 BPM / STOP / SCROLL 数值。
-- 数字键 `1`–`8` 把已选音符移到键列 A1–A8。`0` 移到第一列空着的 BGM 列。预览窗口的内容区拥有键盘焦点时，这些数字键改去控制预览；焦点回到谱面后，仍按这里的规则移动音符。
-- `L` 把已选音符转为长音（Long Note），`S` 转为短音（Short Note）。
-- `,` / `.` 把网格细分倍增或折半。`/` 切到预设细分。`G` 切换网格对齐（Snap to Grid）。`D` 锁定纵向移动（Disable vertical moves）。`=` / `-`，或 `Ctrl` + 滚轮，调整纵向缩放。
-- 小键盘 `+` / `-` 递增或递减当前选中的侧栏 WAV 槽位。
-- `Command` + `G` 打开 **编辑 → 跳转到小节…**（Edit → Go To Measure...）。
+- **写入音符（`F3` 写入模式）**：
+  - **左键单击 / 拖拽**：写入当前右侧列表选中的 `#WAV` / `#BMP` 编号（开启 NT 模式时纵向拖拽直接拉出长条）。
+  - **按住 `Ctrl` + 左键**：写入隐藏音符（Hidden Note）。
+  - **按住 `Ctrl + Shift` + 左键**：写入地雷音符（Landmine）。
+- **选择与修改（`F2` 选择模式）**：
+  - **左键点选 / 空白处框选**：选中单颗或多颗音符；直接拖拽可移动选中音符。
+  - **按住 `Ctrl` + 拖拽**：复制选中的音符（包含短音、长音与 BPM / STOP / SCROLL 事件）到目标位置。
+  - **按住 `Ctrl + Shift` + 左键点击音符**：将全谱面相同标签的音符一并加入选中（或在悬停音符时按 `Ctrl + Shift + A`）。
+  - **双击音符**：弹出输入框，直接修改该音符的标签编号或 BPM / STOP / SCROLL 数值。
+- **删除与吸取（任意模式通用）**：
+  - **右键单击音符**：删除该音符（点击小节线可删除多余小节线）。
+  - **`Shift` + 右键单击音符**：吸取该音符对应的编号，自动在右侧 `#WAV` 列表中定位选中。
+- **快速换轨与长短音转换**：
+  - **数字键 `1`–`8`**：将已选音符移至对应键列（A1–A8）；按住 `Shift` 时仅移动时间最早的一颗。
+  - **数字键 `0`**：将已选音符移至第一列空闲的 BGM 列。
+  - **`L` / `S`**：将已选音符转为长音（Long Note）或短音（Short Note）。
+- **网格、缩放与导航**：
+  - **`,` / `.`**：将当前网格细分（Grid Division）乘 2 或除以 2；按 `/` 切换至预设细分值。
+  - **`G`**：开关网格对齐吸附（Snap to Grid）。
+  - **`D`**：锁定纵向移动（仅允许左右换列，防止误改节拍位置）。
+  - **`=` / `-` 或 `Ctrl` + 滚轮**：放大或缩小谱面纵向高度。
+  - **小键盘 `+` / `-`**：在右侧 `#WAV` 列表中上下切换当前选中的编号。
+  - **`Cmd + G`**：跳转到指定小节（Go To Measure）。
+  - **分屏对照**：在 **视图（View）** 菜单中勾选 `Left Splitter` / `Right Splitter`，可在同一窗口拉开左、中、右三栏谱面视口，配合右侧面板的滚动锁按钮进行多段对照编辑。
 
-### 内置预览器
+### 3. 内置预览器（uBMplay 风格）
 
-在主编辑器里：
+无需在外部配置播放器路径，在主编辑器中即可随时试听与审谱：
 
-| 按键 | 菜单与工具栏 | 作用 |
-| --- | --- | --- |
-| `F5` | 预览 → 从开头播放（Play from beginning） | 从头播放 |
-| `F6` | 预览 → 从当前位置播放（Play from here） | 从编辑区指针所在拍播放 |
-| `F7` | 预览 → 停止（Stop） | 停止 |
+- **`F5`**：从头开始播放（Play from Beginning）
+- **`F6`**：从当前位置播放（Play from Here）
+- **`F7`**：停止播放（Stop）
 
-下面的键在预览窗口获得键盘焦点时生效。HiSpeed 和播放倍速是固定档：一次物理按下只动一档，按住不连跳；已经在端点就停住。松开后再按，才进入下一档。
+当**预览窗口处于激活（拥有键盘焦点）**状态时，可使用以下快捷键实时控制预览（速度档位为逐次点按切换，按住不连跳）：
 
-| 按键 | 作用 |
+| 快捷键 | 功能说明 |
 | --- | --- |
-| `1` / `2` | 降低 / 提高下落速度 HiSpeed。范围 `0.50`–`5.00`，步长 `0.25`，共 19 档。只改变谱面移动速度 |
-| 同时按住 `1` 和 `2` | HiSpeed 朝 `1.00` 回退一档；已经是 `1.00` 则不动 |
-| `3` / `4` | 降低 / 提高播放倍速 Rate。范围 `0.25x`–`4.00x`，步长 `0.25`，共 16 档。改变声音和谱面时间，不改变 HiSpeed 的像素 |
-| 同时按住 `3` 和 `4` | Rate 朝 `1.00x` 回退一档 |
-| `0` | 暂停 / 继续 |
-| `↑` / `↓` | 前移 / 后移 1 小节。按住会重复 |
-| `Page Up` / `Page Down` | 前移 / 后移 4 小节。按住会重复 |
-| `Home` / `End` | 跳到开头 / 最后有内容的小节。按住不重复 |
-| 鼠标滚轮 | 按小节定位 |
-| 长按 `Space` 约 0.5 秒 | 从当前编辑器内容热重载谱面 |
-| `5` | 循环 BGA 显示：关闭、基础层、叠加层、正常、始终 MISS |
-| `6` | 循环判定文字、爆炸、光束的组合开关 |
-| `7` | 切换窗口置顶 |
-| `8` | 循环 1P / 2P 搓盘左右位置 |
-| `9` | 循环 HUD：关闭、播放信息、曲目与选项、全部 |
-| `F1` | 循环发声通道：BGM、KEY、KEY 与 BGM、MINE、KEY 与 BGM 与 MINE |
-| `F2` | 切换双侧布局的自动分开 |
+| `0` | 暂停 / 继续播放 |
+| `1` / `2` | 降低 / 提高下落速度 **HiSpeed**（`0.50`–`5.00`，步长 `0.25`，仅改变视觉流速） |
+| 同时按 `1 + 2` | 将 HiSpeed 向 `1.00` 回退一档 |
+| `3` / `4` | 降低 / 提高播放倍速 **Rate**（`0.25x`–`4.00x`，步长 `0.25`，改变音频与时间流速） |
+| 同时按 `3 + 4` | 将播放倍速 Rate 向 `1.00x` 回退一档 |
+| `↑` / `↓` | 向前 / 向后跳转 1 小节（支持长按连跳） |
+| `Page Up` / `Page Down` | 向前 / 向后跳转 4 小节（支持长按连跳） |
+| `Home` / `End` | 跳至开头 / 最后有内容的小节 |
+| 鼠标滚轮 | 按小节前后滚动定位 |
+| 长按 `Space`（约 0.5 秒） | 从主编辑器当前最新内容热重载谱面 |
+| `5` | 循环切换 BGA 显示模式（关闭 / 基础层 / 叠加层 / 正常 / 始终 MISS） |
+| `6` | 循环切换判定文字、打击爆炸与按键光束显示组合 |
+| `7` | 切换预览窗口置顶 |
+| `8` | 循环切换 1P / 2P 皿位（Scratch）左右布局 |
+| `9` | 循环切换顶部 HUD 信息（关闭 / 播放信息 / 曲目与选项 / 全部） |
+| `F1` | 循环切换发声通道（BGM / KEY / KEY+BGM / MINE / 全部） |
+| `F2` | 切换双侧谱面布局自动分离 |
 
-各档数值、焦点规则和控制条位置见 [docs/preview-controls.md](docs/preview-controls.md)。
+### 4. 音频切片器（woslicer / bmhelper 二合一）
 
-### 内置辅助工具
+通过菜单 **文件 → Audio Slicer…** 或 **窗口 → woslicer II / III** 打开「音频切片器」。左上角的 **Cut points** 下拉框可在两种切音模式间切换：
 
-#### 音频切片器（Audio Slicer）
+- **`woslicer` 模式（按裁断线切音）**：
+  - 载入 `.wav` / `.ogg` / `.mp3` 音频后显示波形包络，直接用鼠标在波形上定位。
+  - 无修饰键时的单键操作：
+    - `Z`：在当前光标位置添加或移除裁断线
+    - `C`：清空所有裁断线
+    - `P` 或 `Enter`：试听当前切片区间
+    - `O`：试听上一段切片区间
+    - `M`：按裁断线批量切分并导出 16-bit PCM `.wav` 文件
+    - `V`：根据当前 BPM 与切点生成 BMSE 剪贴板序列，可直接回到主编辑器粘贴上音
+- **`bmhelper` 模式（按 Division 时间线切音）**：
+  - 配合 Be-Music Helper 中的 Division 切点公式自动计算切片区间，支持一键试听与批量导出。
 
-**文件 → Audio Slicer…**，或 **窗口 → woslicer II / III**。窗口标题在中文界面下为「音频切片器」。**Cut points** 选择 `woslicer`（裁断线）或 `bmhelper`（Division 切分）。
+### 5. MIDI 制谱助手（Be-Music Helper）
 
-下列单键在 `woslicer` 模式、且没有按下修饰键时生效：
+通过菜单 **窗口 → Be-Music Helper** 打开：
 
-| 按键 | 作用 |
+1. 点击 **File → New...** 选择一份 `.mid` 文件（或将 `.mid` / `.bmh` 拖入窗口），在弹出的导入设置中选择目标轨道与 MIDI 通道。
+2. 软件会自动按音高、时值（Gate）与力度（Velocity）对音符进行聚类，生成对应的 `#WAV` 定义列表与 Division 时间线。
+3. 在下半窗格的钢琴卷中查看聚类后的时间线，点击右侧按钮或 **Divisions** 菜单即可：
+   - 一键复制 `#WAV` 定义文本或 BMSE 剪贴板音符序列；
+   - 打开内置音频切片器（自动切至 `bmhelper` 模式）将分轨干音切分为独立 Keysounds；
+   - 调整定义编号偏移（Transpose）、重新聚类（Regenerate）或导出修改后的 MIDI 文件。
+
+### 6. BMSON 专属工作流
+
+当打开或新建 `.bmson` 文件时，主编辑器会自动解锁 BmsONE 的专属视图与功能：
+
+- **声道分轨视图**：在 **视图 → Sound Channel Lanes Display** 中开启分轨列（Normal / Compact / Simple），可在主谱面右侧并排查看每条 Sound Channel 的音符分布、列内 RMS 波形或活动条。
+- **底部声道栏与主控道**：底部声道栏直接显示各声道文件名（单击切换当前声道、双击试听）；左侧主控道（Master Channel）与右侧迷你地图（Minimap）支持全局概览与点击定位预览。
+- **续播与重触发写入**：在写入模式下点击写入默认为续播音符（`c = true`），按住 `Shift` 点击写入为重新触发（`c = false`）。
+- **整曲混音导出**：点击 **文件 → 导出 WAV…**（Export WAV…），可按 Master 混音设置（含音量、硬裁剪 / 软裁剪 / 归一化）直接将整首 BMSON 渲染导出为立体声 WAV。
+
+### 7. MyO2 工具箱与批量变速
+
+- **MyO2 工具箱**：点击 **编辑 → MyO2 工具箱**（或工具栏对应图标），可执行谱面恒速化、64 分音符对齐检查与一键自动对齐（同时支持 BMS 与 BMSON，修改均记录为单步撤销）。
+- **时间选择变速（`F1`）**：切换到时间选择工具后，在谱面上划定起点、中线与终点，即可在底部工具条执行按比例缩放 BPM（Expand By Ratio）、按拍数重定位（Relocate By Value）、将选区转换为 STOP（Transform Into Stop），或按住 `Shift` 直接拖动时间选择线进行实时变速配拍。
+
+---
+
+## 目录结构
+
+| 目录 / 文件 | 说明 |
 | --- | --- |
-| `Z` | 在当前位置添加或移除裁断线 |
-| `C` | 清空裁断线 |
-| `P` 或 `Enter` | 试听当前段 |
-| `O` | 试听前一段 |
-| `M` | 按裁断线切分并导出 WAV |
-| `V` | 生成 BMSE 剪贴板序列 |
-
-#### Be-Music Helper（bmhelper）
-
-**窗口 → Be-Music Helper**。可以导入 MIDI（`.mid`），自动聚类并生成 `#WAV` 定义，管理 Division 时间线，调用同一套音频切分，并导出修改后的 MIDI。
-
-#### MyO2 工具箱
-
-**编辑 → MyO2 工具箱**（Edit → MyO2 ToolBox (Chinese Only)）。工具栏上有同一按钮。窗口标题是「MyO2 工具箱」。这里做恒速化、64 分音符对齐检查，以及按检查结果自动对齐。
-
-#### BMSON 整曲混音
-
-打开 `.bmson` 后，用 **文件 → 导出 WAV…**（File → Export WAV…）导出整曲混音 WAV。
-
-## 仓库目录
-
-| 路径 | 内容 |
-| --- | --- |
-| `core/` | 跨平台 C++20 核心库 `ibms_core`。精确拍号分数（`BeatPosition`）、BMS / BMSON 解析与保存、长音配对、时序计算、音频解码 |
-| `macos/` | 原生应用 `IBMSNative`，以及 Objective-C++ / C++ 桥 `IBMSBridge`。桥里包括 Metal 谱面、分组重采样混音，以及 FFmpeg 视频解码时钟 |
-| `tests/`、`macos/Tests/` | C++ 核心测试，以及 macOS 原生模块、界面和音视频回归。CTest 共 68 个测试目标 |
-| `third_party/` | 静态依赖：`minimp3/`、`stb/stb_vorbis.c`、`libsamplerate/`、`ffmpeg-lgpl/`（构建脚本与重新链接说明） |
-| `docs/` | 设计说明、[预览控制](docs/preview-controls.md)，以及阶段性验证记录 |
-
-更细的预览键位以 [docs/preview-controls.md](docs/preview-controls.md) 为准。FFmpeg 的重新链接步骤以 [third_party/ffmpeg-lgpl/RELINK.txt](third_party/ffmpeg-lgpl/RELINK.txt) 为准。
+| `core/` | 跨平台 C++20 核心库 `ibms_core`（`BeatPosition` 精确拍号分数、BMS / BMSON 解析与序列化、长音配对、时序推导、WAV / OGG / MP3 解码） |
+| `macos/Sources/IBMSBridge/` | Objective-C++ 与 C++ 桥接层（文档桥、分组带限重采样混音桥 `PreviewAudio/`、FFmpeg 视频解码桥 `PreviewVideo/`） |
+| `macos/Sources/IBMSNative/` | macOS 原生应用源码（主编辑器、Metal 谱面渲染器、内置 uBMplay 预览器、BmsONE / bmhelper / woslicer 集成模块） |
+| `tests/`、`macos/Tests/` | C++ 核心测试与 Swift 原生模块测试套件（共 68 个 CTest 测试目标） |
+| `third_party/` | 内置静态依赖源码（`minimp3`、`stb_vorbis`、`libsamplerate`、`ffmpeg-lgpl` 构建脚本与重链接说明） |
+| `docs/` | 架构说明、[内置预览器键位细则](docs/preview-controls.md)及验证记录 |
