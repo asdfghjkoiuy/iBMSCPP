@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -73,7 +74,7 @@ std::optional<DecodedAudio> decode_wav(const std::vector<std::uint8_t>& bytes)
             sample_rate = static_cast<int>(read_u32(bytes, body + 4));
             bits = static_cast<int>(read_u16(bytes, body + 14));
         } else if (id == "data") {
-            if (!pcm || bits != 16 || channels <= 0 || sample_rate <= 0) {
+            if (!pcm || bits != 16 || channels <= 0 || channels > 32 || sample_rate <= 0) {
                 return std::nullopt;
             }
             const std::size_t byte_count = std::min(size, bytes.size() - body);
@@ -191,7 +192,19 @@ std::optional<DecodedAudio> decode_audio_bytes(
     const std::vector<std::uint8_t>& bytes, std::string_view hint_ext)
 {
     const auto ext = lower_ascii(std::string(hint_ext));
-    if (ext == ".wav" || (ext.empty() && starts_with(bytes, 0, "RIFF"))) {
+    if (ext == ".wav") {
+        if (auto wav = decode_wav(bytes); wav.has_value()) {
+            return wav;
+        }
+        if (looks_like_ogg(bytes)) {
+            return decode_ogg(bytes);
+        }
+        if (looks_like_mp3(bytes)) {
+            return decode_mp3(bytes);
+        }
+        return std::nullopt;
+    }
+    if (ext.empty() && starts_with(bytes, 0, "RIFF")) {
         return decode_wav(bytes);
     }
     if (ext == ".ogg" || looks_like_ogg(bytes)) {
@@ -216,43 +229,101 @@ std::optional<DecodedAudio> decode_audio_file(std::string_view path)
     if (!input) {
         return std::nullopt;
     }
-    std::vector<std::uint8_t> bytes(
-        (std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+    input.seekg(0, std::ios::end);
+    const std::streamoff end = input.tellg();
+    if (!input || end < 0) {
+        return std::nullopt;
+    }
+    input.clear();
+    input.seekg(0, std::ios::beg);
+    std::vector<std::uint8_t> bytes;
+    const auto size = static_cast<std::size_t>(end);
+    bytes.reserve(size);
+    bytes.resize(size);
+    if (!bytes.empty()) {
+        input.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+        const auto read = input.gcount();
+        if (read < 0) {
+            return std::nullopt;
+        }
+        if (static_cast<std::size_t>(read) < bytes.size()) {
+            bytes.resize(static_cast<std::size_t>(read));
+        }
+    }
     return decode_audio_bytes(bytes, extension_of(resolved));
 }
 
 std::vector<std::uint8_t> encode_pcm16_wav(const DecodedAudio& audio)
 {
-    const int channels = audio.channels > 0 ? audio.channels : 1;
+    const int channels = audio.channels > 0 && audio.channels <= 32 ? audio.channels : 1;
     const int rate = audio.sample_rate > 0 ? audio.sample_rate : 44100;
-    const auto data_size = static_cast<std::uint32_t>(audio.samples.size() * 2);
-    const std::uint32_t riff_size = 36 + data_size;
+    const std::uint64_t channel_count = static_cast<std::uint64_t>(channels);
+    const std::uint64_t byte_rate_wide =
+        static_cast<std::uint64_t>(static_cast<std::uint32_t>(rate)) * channel_count * 2u;
+    const std::uint64_t pcm_bytes = static_cast<std::uint64_t>(audio.samples.size()) * 2u;
+    const auto saturate_u32 = [](std::uint64_t value) {
+        return value > std::numeric_limits<std::uint32_t>::max()
+            ? std::numeric_limits<std::uint32_t>::max()
+            : static_cast<std::uint32_t>(value);
+    };
+    const std::uint32_t data_size = saturate_u32(pcm_bytes);
+    const std::uint32_t riff_size = saturate_u32(36ull + static_cast<std::uint64_t>(data_size));
+    std::uint8_t header[44];
+    auto write_u16 = [&](std::size_t offset, std::uint16_t value) {
+        header[offset] = static_cast<std::uint8_t>(value);
+        header[offset + 1] = static_cast<std::uint8_t>(value >> 8);
+    };
+    auto write_u32 = [&](std::size_t offset, std::uint32_t value) {
+        header[offset] = static_cast<std::uint8_t>(value);
+        header[offset + 1] = static_cast<std::uint8_t>(value >> 8);
+        header[offset + 2] = static_cast<std::uint8_t>(value >> 16);
+        header[offset + 3] = static_cast<std::uint8_t>(value >> 24);
+    };
+    header[0] = 'R';
+    header[1] = 'I';
+    header[2] = 'F';
+    header[3] = 'F';
+    write_u32(4, riff_size);
+    header[8] = 'W';
+    header[9] = 'A';
+    header[10] = 'V';
+    header[11] = 'E';
+    header[12] = 'f';
+    header[13] = 'm';
+    header[14] = 't';
+    header[15] = ' ';
+    write_u32(16, 16);
+    write_u16(20, 1);
+    write_u16(22, static_cast<std::uint16_t>(channels));
+    write_u32(24, static_cast<std::uint32_t>(rate));
+    write_u32(28, saturate_u32(byte_rate_wide));
+    write_u16(32, static_cast<std::uint16_t>(channel_count * 2u));
+    write_u16(34, 16);
+    header[36] = 'd';
+    header[37] = 'a';
+    header[38] = 't';
+    header[39] = 'a';
+    write_u32(40, data_size);
+
     std::vector<std::uint8_t> bytes;
-    auto append_u16 = [&](std::uint16_t value) {
-        bytes.push_back(static_cast<std::uint8_t>(value));
-        bytes.push_back(static_cast<std::uint8_t>(value >> 8));
-    };
-    auto append_u32 = [&](std::uint32_t value) {
-        bytes.push_back(static_cast<std::uint8_t>(value));
-        bytes.push_back(static_cast<std::uint8_t>(value >> 8));
-        bytes.push_back(static_cast<std::uint8_t>(value >> 16));
-        bytes.push_back(static_cast<std::uint8_t>(value >> 24));
-    };
-    bytes.insert(bytes.end(), {'R', 'I', 'F', 'F'});
-    append_u32(riff_size);
-    bytes.insert(bytes.end(), {'W', 'A', 'V', 'E', 'f', 'm', 't', ' '});
-    append_u32(16);
-    append_u16(1);
-    append_u16(static_cast<std::uint16_t>(channels));
-    append_u32(static_cast<std::uint32_t>(rate));
-    append_u32(static_cast<std::uint32_t>(rate * channels * 2));
-    append_u16(static_cast<std::uint16_t>(channels * 2));
-    append_u16(16);
-    bytes.insert(bytes.end(), {'d', 'a', 't', 'a'});
-    append_u32(data_size);
-    for (const auto sample : audio.samples) {
-        append_u16(static_cast<std::uint16_t>(sample));
+    const std::uint64_t reserved = 44ull + pcm_bytes;
+    if (reserved <= static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max())) {
+        bytes.reserve(static_cast<std::size_t>(reserved));
     }
+    bytes.insert(bytes.end(), header, header + 44);
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+    if (!audio.samples.empty()) {
+        const auto* raw = reinterpret_cast<const std::uint8_t*>(audio.samples.data());
+        const auto pcm_span = static_cast<std::size_t>(pcm_bytes);
+        bytes.insert(bytes.end(), raw, raw + pcm_span);
+    }
+#else
+    for (const auto sample : audio.samples) {
+        const auto value = static_cast<std::uint16_t>(sample);
+        bytes.push_back(static_cast<std::uint8_t>(value));
+        bytes.push_back(static_cast<std::uint8_t>(value >> 8));
+    }
+#endif
     return bytes;
 }
 

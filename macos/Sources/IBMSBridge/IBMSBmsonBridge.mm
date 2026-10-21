@@ -46,7 +46,11 @@ std::string cppString(NSString *value) {
         return {};
     }
     const char *utf8 = value.UTF8String;
-    return utf8 == nullptr ? std::string() : std::string(utf8);
+    if (utf8 == nullptr) {
+        return {};
+    }
+    const NSUInteger length = [value lengthOfBytesUsingEncoding:NSUTF8StringEncoding];
+    return std::string(utf8, static_cast<std::size_t>(length));
 }
 
 ibms::BmsonBgaLane cppBgaLane(NSInteger lane) {
@@ -232,6 +236,23 @@ ibms::BmsonFromBmsOptions cppFromBmsOptions(NSString *path, IBMSBmsonFromBmsOpti
 @end
 
 namespace {
+
+IBMSBmsonInfoSnapshot *emptyInfoSnapshot() {
+    IBMSBmsonInfoSnapshot *snapshot = [IBMSBmsonInfoSnapshot new];
+    snapshot->_title = @"";
+    snapshot->_subtitle = @"";
+    snapshot->_artist = @"";
+    snapshot->_subartists = @[];
+    snapshot->_genre = @"";
+    snapshot->_modeHint = @"";
+    snapshot->_chartName = @"";
+    snapshot->_level = 0;
+    snapshot->_initBPM = 0;
+    snapshot->_judgeRank = 0;
+    snapshot->_total = 0;
+    snapshot->_resolution = 0;
+    return snapshot;
+}
 
 NSArray<IBMSBmsonBgaEventSnapshot *> *bgaEventSnapshots(const std::vector<ibms::BmsonBgaEvent>& source) {
     NSMutableArray<IBMSBmsonBgaEventSnapshot *> *notes =
@@ -474,115 +495,155 @@ NSArray<IBMSBmsonBgaEventSnapshot *> *bgaEventSnapshots(const std::vector<ibms::
 }
 
 - (NSString *)version {
-    return nsString(_document->version());
+    try {
+        return nsString(_document->version());
+    } catch (...) {
+        return @"";
+    }
 }
 
 - (IBMSBmsonInfoSnapshot *)info {
-    const ibms::BmsonInfo& source = _document->info();
-    IBMSBmsonInfoSnapshot *snapshot = [IBMSBmsonInfoSnapshot new];
-    snapshot->_title = nsString(source.title);
-    snapshot->_subtitle = nsString(source.subtitle);
-    snapshot->_artist = nsString(source.artist);
-    NSMutableArray<NSString *> *subartists = [NSMutableArray arrayWithCapacity:source.subartists.size()];
-    for (const std::string& name : source.subartists) {
-        [subartists addObject:nsString(name)];
+    try {
+        const ibms::BmsonInfo& source = _document->info();
+        IBMSBmsonInfoSnapshot *snapshot = [IBMSBmsonInfoSnapshot new];
+        snapshot->_title = nsString(source.title);
+        snapshot->_subtitle = nsString(source.subtitle);
+        snapshot->_artist = nsString(source.artist);
+        NSMutableArray<NSString *> *subartists = [NSMutableArray arrayWithCapacity:source.subartists.size()];
+        for (const std::string& name : source.subartists) {
+            [subartists addObject:nsString(name)];
+        }
+        snapshot->_subartists = [subartists copy];
+        snapshot->_genre = nsString(source.genre);
+        snapshot->_modeHint = nsString(source.mode_hint);
+        snapshot->_chartName = nsString(source.chart_name);
+        snapshot->_level = source.level;
+        snapshot->_initBPM = source.init_bpm;
+        snapshot->_judgeRank = source.judge_rank;
+        snapshot->_total = source.total;
+        snapshot->_resolution = source.resolution;
+        return snapshot;
+    } catch (...) {
+        return emptyInfoSnapshot();
     }
-    snapshot->_subartists = [subartists copy];
-    snapshot->_genre = nsString(source.genre);
-    snapshot->_modeHint = nsString(source.mode_hint);
-    snapshot->_chartName = nsString(source.chart_name);
-    snapshot->_level = source.level;
-    snapshot->_initBPM = source.init_bpm;
-    snapshot->_judgeRank = source.judge_rank;
-    snapshot->_total = source.total;
-    snapshot->_resolution = source.resolution;
-    return snapshot;
 }
 
 - (NSArray<IBMSBmsonBarLineSnapshot *> *)lines {
-    const auto& source = _document->lines();
-    NSMutableArray<IBMSBmsonBarLineSnapshot *> *lines =
-        [NSMutableArray arrayWithCapacity:source.size()];
-    for (const ibms::BmsonBarLine& line : source) {
-        IBMSBmsonBarLineSnapshot *item = [IBMSBmsonBarLineSnapshot new];
-        item->_y = line.y;
-        [lines addObject:item];
+    try {
+        const auto& source = _document->lines();
+        NSMutableArray<IBMSBmsonBarLineSnapshot *> *lines =
+            [NSMutableArray arrayWithCapacity:source.size()];
+        for (const ibms::BmsonBarLine& line : source) {
+            IBMSBmsonBarLineSnapshot *item = [IBMSBmsonBarLineSnapshot new];
+            item->_y = line.y;
+            [lines addObject:item];
+        }
+        return [lines copy];
+    } catch (...) {
+        return @[];
     }
-    return [lines copy];
 }
 
 - (NSArray<IBMSBmsonBpmNoteSnapshot *> *)bpmNotes {
-    const auto& source = _document->bpm_notes();
-    NSMutableArray<IBMSBmsonBpmNoteSnapshot *> *notes =
-        [NSMutableArray arrayWithCapacity:source.size()];
-    for (const ibms::BmsonBpmNote& note : source) {
-        IBMSBmsonBpmNoteSnapshot *item = [IBMSBmsonBpmNoteSnapshot new];
-        item->_y = note.y;
-        item->_v = note.v;
-        [notes addObject:item];
+    try {
+        const auto& source = _document->bpm_notes();
+        NSMutableArray<IBMSBmsonBpmNoteSnapshot *> *notes =
+            [NSMutableArray arrayWithCapacity:source.size()];
+        for (const ibms::BmsonBpmNote& note : source) {
+            IBMSBmsonBpmNoteSnapshot *item = [IBMSBmsonBpmNoteSnapshot new];
+            item->_y = note.y;
+            item->_v = note.v;
+            [notes addObject:item];
+        }
+        return [notes copy];
+    } catch (...) {
+        return @[];
     }
-    return [notes copy];
 }
 
 - (NSArray<IBMSBmsonStopNoteSnapshot *> *)stopNotes {
-    const auto& source = _document->stop_notes();
-    NSMutableArray<IBMSBmsonStopNoteSnapshot *> *notes =
-        [NSMutableArray arrayWithCapacity:source.size()];
-    for (const ibms::BmsonStopNote& note : source) {
-        IBMSBmsonStopNoteSnapshot *item = [IBMSBmsonStopNoteSnapshot new];
-        item->_y = note.y;
-        item->_v = note.v;
-        [notes addObject:item];
+    try {
+        const auto& source = _document->stop_notes();
+        NSMutableArray<IBMSBmsonStopNoteSnapshot *> *notes =
+            [NSMutableArray arrayWithCapacity:source.size()];
+        for (const ibms::BmsonStopNote& note : source) {
+            IBMSBmsonStopNoteSnapshot *item = [IBMSBmsonStopNoteSnapshot new];
+            item->_y = note.y;
+            item->_v = note.v;
+            [notes addObject:item];
+        }
+        return [notes copy];
+    } catch (...) {
+        return @[];
     }
-    return [notes copy];
 }
 
 - (NSArray<IBMSBmsonBgaHeaderSnapshot *> *)bgaHeaders {
-    const auto& source = _document->bga_headers();
-    NSMutableArray<IBMSBmsonBgaHeaderSnapshot *> *headers =
-        [NSMutableArray arrayWithCapacity:source.size()];
-    for (const ibms::BmsonBgaHeader& header : source) {
-        IBMSBmsonBgaHeaderSnapshot *item = [IBMSBmsonBgaHeaderSnapshot new];
-        item->_identifier = header.id;
-        item->_name = nsString(header.name);
-        [headers addObject:item];
+    try {
+        const auto& source = _document->bga_headers();
+        NSMutableArray<IBMSBmsonBgaHeaderSnapshot *> *headers =
+            [NSMutableArray arrayWithCapacity:source.size()];
+        for (const ibms::BmsonBgaHeader& header : source) {
+            IBMSBmsonBgaHeaderSnapshot *item = [IBMSBmsonBgaHeaderSnapshot new];
+            item->_identifier = header.id;
+            item->_name = nsString(header.name);
+            [headers addObject:item];
+        }
+        return [headers copy];
+    } catch (...) {
+        return @[];
     }
-    return [headers copy];
 }
 
 - (NSArray<IBMSBmsonBgaEventSnapshot *> *)bgaEvents {
-    return bgaEventSnapshots(_document->bga_events());
+    try {
+        return bgaEventSnapshots(_document->bga_events());
+    } catch (...) {
+        return @[];
+    }
 }
 
 - (NSArray<IBMSBmsonBgaEventSnapshot *> *)layerEvents {
-    return bgaEventSnapshots(_document->layer_events());
+    try {
+        return bgaEventSnapshots(_document->layer_events());
+    } catch (...) {
+        return @[];
+    }
 }
 
 - (NSArray<IBMSBmsonBgaEventSnapshot *> *)poorEvents {
-    return bgaEventSnapshots(_document->poor_events());
+    try {
+        return bgaEventSnapshots(_document->poor_events());
+    } catch (...) {
+        return @[];
+    }
 }
 
 - (NSArray<IBMSBmsonSoundChannelSnapshot *> *)soundChannels {
-    const auto& source = _document->sound_channels();
-    NSMutableArray<IBMSBmsonSoundChannelSnapshot *> *channels =
-        [NSMutableArray arrayWithCapacity:source.size()];
-    for (const ibms::BmsonSoundChannel& channel : source) {
-        NSMutableArray<IBMSBmsonNoteSnapshot *> *notes =
-            [NSMutableArray arrayWithCapacity:channel.notes.size()];
-        for (const ibms::BmsonNote& note : channel.notes) {
-            IBMSBmsonNoteSnapshot *item = [IBMSBmsonNoteSnapshot new];
-            item->_x = note.x;
-            item->_y = note.y;
-            item->_l = note.l;
-            item->_c = note.c ? YES : NO;
-            [notes addObject:item];
+    try {
+        const auto& source = _document->sound_channels();
+        NSMutableArray<IBMSBmsonSoundChannelSnapshot *> *channels =
+            [NSMutableArray arrayWithCapacity:source.size()];
+        for (const ibms::BmsonSoundChannel& channel : source) {
+            NSMutableArray<IBMSBmsonNoteSnapshot *> *notes =
+                [NSMutableArray arrayWithCapacity:channel.notes.size()];
+            for (const ibms::BmsonNote& note : channel.notes) {
+                IBMSBmsonNoteSnapshot *item = [IBMSBmsonNoteSnapshot new];
+                item->_x = note.x;
+                item->_y = note.y;
+                item->_l = note.l;
+                item->_c = note.c ? YES : NO;
+                [notes addObject:item];
+            }
+            IBMSBmsonSoundChannelSnapshot *item = [IBMSBmsonSoundChannelSnapshot new];
+            item->_name = nsString(channel.name);
+            item->_notes = [notes copy];
+            [channels addObject:item];
         }
-        IBMSBmsonSoundChannelSnapshot *item = [IBMSBmsonSoundChannelSnapshot new];
-        item->_name = nsString(channel.name);
-        item->_notes = [notes copy];
-        [channels addObject:item];
+        return [channels copy];
+    } catch (...) {
+        return @[];
     }
-    return [channels copy];
 }
 
 - (BOOL)insertSoundNoteOnChannel:(NSUInteger)channelIndex
@@ -818,7 +879,11 @@ NSArray<IBMSBmsonBgaEventSnapshot *> *bgaEventSnapshots(const std::vector<ibms::
 }
 
 - (NSString *)infoExtraStringForKey:(NSString *)key {
-    return nsString(_document->info_extra_string(cppString(key)));
+    try {
+        return nsString(_document->info_extra_string(cppString(key)));
+    } catch (...) {
+        return @"";
+    }
 }
 
 - (BOOL)setInfoExtraString:(NSString *)value
@@ -840,7 +905,11 @@ NSArray<IBMSBmsonBgaEventSnapshot *> *bgaEventSnapshots(const std::vector<ibms::
 }
 
 - (NSString *)infoExtraObjectJSON {
-    return nsString(_document->info_extra_object_json());
+    try {
+        return nsString(_document->info_extra_object_json());
+    } catch (...) {
+        return @"{}";
+    }
 }
 
 - (BOOL)replaceInfoExtraObjectJSON:(NSString *)json
@@ -1100,11 +1169,19 @@ NSArray<IBMSBmsonBgaEventSnapshot *> *bgaEventSnapshots(const std::vector<ibms::
 }
 
 - (BOOL)resolutionConversionLosesInformation:(NSInteger)newResolution {
-    return _document->resolution_conversion_loses_information(static_cast<int>(newResolution)) ? YES : NO;
+    try {
+        return _document->resolution_conversion_loses_information(static_cast<int>(newResolution)) ? YES : NO;
+    } catch (...) {
+        return YES;
+    }
 }
 
 - (NSInteger)acceptableResolutionDivider {
-    return _document->acceptable_resolution_divider();
+    try {
+        return _document->acceptable_resolution_divider();
+    } catch (...) {
+        return 1;
+    }
 }
 
 @end

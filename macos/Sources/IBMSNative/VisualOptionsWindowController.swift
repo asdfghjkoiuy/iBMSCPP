@@ -30,7 +30,11 @@ final class VisualOptionsWindowController: NSWindowController {
     func present(over parent: NSWindow, theme: ChartTheme, completion: @escaping (ChartTheme?) -> Void) {
         pendingResult = nil
         content.load(theme)
-        parent.beginSheet(window!) { [weak self] _ in
+        guard let sheet = window else {
+            completion(nil)
+            return
+        }
+        parent.beginSheet(sheet) { [weak self] _ in
             self?.content.detachPanels()
             completion(self?.pendingResult)
         }
@@ -206,23 +210,23 @@ private final class VisualOptionsDialogView: FlippedDialogView {
         visual.noteFont = font("noteFont", visual.noteFont)
         visual.measureFont = font("measureFont", visual.measureFont)
         visual.timeSelectionBPMFont = font("timeSelectionBPMFont", visual.timeSelectionBPMFont)
-        visual.noteHeight = OptionDialogControls.integer(
-            from: integerFields["noteHeight"]!,
+        visual.noteHeight = clampedInteger(
+            "noteHeight",
             default: visual.noteHeight,
             range: VisualOptionsLayout.noteHeightRange
         )
-        visual.labelVerticalShift = OptionDialogControls.integer(
-            from: integerFields["labelVerticalShift"]!,
+        visual.labelVerticalShift = clampedInteger(
+            "labelVerticalShift",
             default: visual.labelVerticalShift,
             range: VisualOptionsLayout.labelShiftRange
         )
-        visual.labelHorizontalShift = OptionDialogControls.integer(
-            from: integerFields["labelHorizontalShift"]!,
+        visual.labelHorizontalShift = clampedInteger(
+            "labelHorizontalShift",
             default: visual.labelHorizontalShift,
             range: VisualOptionsLayout.labelShiftRange
         )
-        visual.longLabelHorizontalShift = OptionDialogControls.integer(
-            from: integerFields["longLabelHorizontalShift"]!,
+        visual.longLabelHorizontalShift = clampedInteger(
+            "longLabelHorizontalShift",
             default: visual.longLabelHorizontalShift,
             range: VisualOptionsLayout.labelShiftRange
         )
@@ -231,13 +235,13 @@ private final class VisualOptionsDialogView: FlippedDialogView {
             default: visual.hiddenNoteOpacity,
             range: VisualOptionsLayout.hiddenOpacityRange
         )
-        visual.timeSelectionDeltaMouseOver = OptionDialogControls.integer(
-            from: integerFields["timeSelectionDeltaMouseOver"]!,
+        visual.timeSelectionDeltaMouseOver = clampedInteger(
+            "timeSelectionDeltaMouseOver",
             default: visual.timeSelectionDeltaMouseOver,
             range: VisualOptionsLayout.timeSelectionSensitivityRange
         )
-        visual.middleDeltaRelease = OptionDialogControls.integer(
-            from: integerFields["middleDeltaRelease"]!,
+        visual.middleDeltaRelease = clampedInteger(
+            "middleDeltaRelease",
             default: visual.middleDeltaRelease,
             range: VisualOptionsLayout.middleSensitivityRange
         )
@@ -260,6 +264,11 @@ private final class VisualOptionsDialogView: FlippedDialogView {
         }
         theme.columns = columns
         return theme
+    }
+
+    private func clampedInteger(_ key: String, default fallback: Int, range: ClosedRange<Int>) -> Int {
+        guard let field = integerFields[key] else { return fallback }
+        return OptionDialogControls.integer(from: field, default: fallback, range: range)
     }
 
     private func color(_ key: String, _ fallback: ThemeColor) -> ThemeColor {

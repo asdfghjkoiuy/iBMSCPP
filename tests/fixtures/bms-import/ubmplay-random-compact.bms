@@ -1,0 +1,9 @@
+#TITLE Compact
+#WAV01 kick.wav
+#WAV02 snare.wav
+#RANDOM2
+#IF1
+#00011:01
+#IF2
+#00012:02
+#ENDIF

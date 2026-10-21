@@ -16,31 +16,50 @@ struct IBMSNativeApplication {
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    private let state = ApplicationState()
+    private let state: ApplicationState
     private var previewMenuTarget: NSObject?
-    private lazy var previewWindowController = PreviewWindowController(
-        state: state,
-        documentSource: { [weak self] in
-            self?.mainWindowController.previewAudioContext()
-        },
-        onPlayheadBeat: { [weak self] beat in
-            self?.mainWindowController.setPreviewPlayheadBeat(beat)
-        }
-    )
+    /// 没打开过预览就不创建窗口。关主窗时只关已经加载的那一个。
+    private var previewController: PreviewWindowController?
+    private var previewWindowController: PreviewWindowController {
+        if let previewController { return previewController }
+        let controller = PreviewWindowController(
+            state: state,
+            documentSource: { [weak self] in
+                self?.mainWindowController.previewAudioContext()
+            },
+            onPlayheadBeat: { [weak self] beat in
+                self?.mainWindowController.setPreviewPlayheadBeat(beat)
+            },
+            onReloadPreview: { [weak self] in
+                self?.mainWindowController.reloadPreviewRandomization()
+            }
+        )
+        previewController = controller
+        return controller
+    }
     private lazy var mainWindowController = MainWindowController(
         state: state,
         showPreview: { [weak self] in self?.showPreview() },
         hidePreview: { [weak self] in self?.hidePreview() },
         playFromBeginning: { [weak self] in self?.playPreview(fromBeginning: true) },
         playFromHere: { [weak self] in self?.playPreview(fromBeginning: false) },
-        stopPreview: { [weak self] in self?.stopPreviewPlayback() }
+        stopPreview: { [weak self] in self?.stopPreviewPlayback() },
+        closePreview: { [weak self] in
+            guard let preview = self?.previewController else { return }
+            preview.stopPlayback()
+            preview.close()
+        }
     )
     private lazy var splashWindowController = SplashWindowController()
-    private lazy var bmsoneWindowController = BmsONEWindowController()
     private lazy var bmhelperWindowController = BmhelperWindowController()
     private lazy var audioSlicerWindowController = AudioSlicerWindowController()
     private var didFinishLaunching = false
     private var pendingOpenURLs: [URL] = []
+
+    override init() {
+        state = ApplicationState()
+        super.init()
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NativeLocalization.configureDefaultLanguage()

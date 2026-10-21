@@ -25,6 +25,7 @@ final class ChartRenderer: NSObject, MTKViewDelegate {
     private let pipeline: MTLRenderPipelineState?
     private var vertices: [ChartVertex] = []
     private var vertexBuffer: MTLBuffer?
+    private var vertexCount = 0
 
     var isAvailable: Bool { pipeline != nil && commandQueue != nil }
 
@@ -36,20 +37,16 @@ final class ChartRenderer: NSObject, MTKViewDelegate {
 
     func replaceGeometry(_ quads: [(CGRect, NSColor)], viewport: CGSize, device: MTLDevice) {
         guard viewport.width > 0, viewport.height > 0 else {
-            vertices = []
-            vertexBuffer = nil
+            clearVertices()
             return
         }
 
         vertices.removeAll(keepingCapacity: true)
         vertices.reserveCapacity(quads.count * 6)
         for (rect, color) in quads {
-            vertices.append(contentsOf: Self.vertices(for: rect, color: color, viewport: viewport))
+            Self.appendQuad(into: &vertices, rect: rect, color: color, viewport: viewport)
         }
-        vertexBuffer = vertices.withUnsafeBytes { bytes in
-            guard let baseAddress = bytes.baseAddress, bytes.count > 0 else { return nil }
-            return device.makeBuffer(bytes: baseAddress, length: bytes.count, options: .storageModeShared)
-        }
+        storeVertices(device: device)
     }
 
     func replaceGeometry(
@@ -60,25 +57,21 @@ final class ChartRenderer: NSObject, MTKViewDelegate {
         device: MTLDevice
     ) {
         guard viewport.width > 0, viewport.height > 0 else {
-            vertices = []
-            vertexBuffer = nil
+            clearVertices()
             return
         }
         vertices.removeAll(keepingCapacity: true)
         vertices.reserveCapacity((quads.count + gradients.count + overlays.count) * 6)
         for (rect, color) in quads {
-            vertices.append(contentsOf: Self.vertices(for: rect, color: color, viewport: viewport))
+            Self.appendQuad(into: &vertices, rect: rect, color: color, viewport: viewport)
         }
         for primitive in gradients {
-            vertices.append(contentsOf: Self.vertices(for: primitive, viewport: viewport))
+            Self.appendGradient(primitive, into: &vertices, viewport: viewport)
         }
         for (rect, color) in overlays {
-            vertices.append(contentsOf: Self.vertices(for: rect, color: color, viewport: viewport))
+            Self.appendQuad(into: &vertices, rect: rect, color: color, viewport: viewport)
         }
-        vertexBuffer = vertices.withUnsafeBytes { bytes in
-            guard let baseAddress = bytes.baseAddress, bytes.count > 0 else { return nil }
-            return device.makeBuffer(bytes: baseAddress, length: bytes.count, options: .storageModeShared)
-        }
+        storeVertices(device: device)
     }
 
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {}
@@ -91,62 +84,126 @@ final class ChartRenderer: NSObject, MTKViewDelegate {
             return
         }
 
-        if let pipeline, let vertexBuffer, !vertices.isEmpty {
+        if let pipeline, let vertexBuffer, vertexCount > 0 {
             encoder.setRenderPipelineState(pipeline)
             encoder.setVertexBuffer(vertexBuffer, offset: 0, index: 0)
-            encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: vertices.count)
+            encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: vertexCount)
         }
         encoder.endEncoding()
         commandBuffer.present(drawable)
         commandBuffer.commit()
     }
 
-    private static func vertices(for rect: CGRect, color: NSColor, viewport: CGSize) -> [ChartVertex] {
-        vertices(for: rect, topLeft: color, topRight: color, bottomRight: color, bottomLeft: color, viewport: viewport)
+    private func clearVertices() {
+        vertices.removeAll(keepingCapacity: true)
+        vertexCount = 0
     }
 
-    private static func vertices(for primitive: LegacyGradientPrimitive, viewport: CGSize) -> [ChartVertex] {
-        func color(at point: CGPoint) -> NSColor {
-            LegacyChartPaint.interpolate(
-                primitive.colors,
-                weight: LegacyChartPaint.gradientWeight(at: point, from: primitive.start, to: primitive.end)
-            )
+    /// 容量够就原地拷贝。不够时按 1.5 倍扩，仍不够再按 2 倍，避免每帧 `makeBuffer`。
+    private func storeVertices(device: MTLDevice) {
+        vertexCount = vertices.count
+        let byteCount = vertexCount * MemoryLayout<ChartVertex>.stride
+        guard byteCount > 0 else { return }
+        if let vertexBuffer, vertexBuffer.length >= byteCount {
+            vertices.withUnsafeBytes { raw in
+                guard let baseAddress = raw.baseAddress else { return }
+                vertexBuffer.contents().copyMemory(from: baseAddress, byteCount: byteCount)
+            }
+            return
         }
-        let topLeft = CGPoint(x: primitive.fill.minX, y: primitive.fill.minY)
-        let topRight = CGPoint(x: primitive.fill.maxX, y: primitive.fill.minY)
-        let bottomRight = CGPoint(x: primitive.fill.maxX, y: primitive.fill.maxY)
-        let bottomLeft = CGPoint(x: primitive.fill.minX, y: primitive.fill.maxY)
-        return vertices(
-            for: primitive.fill,
-            topLeft: color(at: topLeft),
-            topRight: color(at: topRight),
-            bottomRight: color(at: bottomRight),
-            bottomLeft: color(at: bottomLeft),
+        let previous = vertexBuffer?.length ?? 0
+        var capacity = byteCount
+        if previous > 0 {
+            let grown = previous + previous / 2
+            capacity = grown >= byteCount ? grown : max(byteCount, previous * 2)
+        }
+        guard let buffer = device.makeBuffer(length: capacity, options: .storageModeShared) else {
+            vertexBuffer = nil
+            vertexCount = 0
+            return
+        }
+        vertices.withUnsafeBytes { raw in
+            guard let baseAddress = raw.baseAddress else { return }
+            buffer.contents().copyMemory(from: baseAddress, byteCount: byteCount)
+        }
+        vertexBuffer = buffer
+    }
+
+    private static func appendQuad(
+        into vertices: inout [ChartVertex],
+        rect: CGRect,
+        color: NSColor,
+        viewport: CGSize
+    ) {
+        let rgba = colorVector(color)
+        appendQuad(
+            into: &vertices,
+            rect: rect,
+            topLeft: rgba,
+            topRight: rgba,
+            bottomRight: rgba,
+            bottomLeft: rgba,
             viewport: viewport
         )
     }
 
-    private static func vertices(
-        for rect: CGRect,
-        topLeft: NSColor,
-        topRight: NSColor,
-        bottomRight: NSColor,
-        bottomLeft: NSColor,
+    private static func appendGradient(
+        _ primitive: LegacyGradientPrimitive,
+        into vertices: inout [ChartVertex],
         viewport: CGSize
-    ) -> [ChartVertex] {
-        func vector(_ color: NSColor) -> SIMD4<Float> {
-            let rgba = color.usingColorSpace(.deviceRGB) ?? color
-            return SIMD4(Float(rgba.redComponent), Float(rgba.greenComponent), Float(rgba.blueComponent), Float(rgba.alphaComponent))
+    ) {
+        func color(at point: CGPoint) -> SIMD4<Float> {
+            colorVector(
+                LegacyChartPaint.interpolate(
+                    primitive.colors,
+                    weight: LegacyChartPaint.gradientWeight(at: point, from: primitive.start, to: primitive.end)
+                )
+            )
         }
+        appendQuad(
+            into: &vertices,
+            rect: primitive.fill,
+            topLeft: color(at: CGPoint(x: primitive.fill.minX, y: primitive.fill.minY)),
+            topRight: color(at: CGPoint(x: primitive.fill.maxX, y: primitive.fill.minY)),
+            bottomRight: color(at: CGPoint(x: primitive.fill.maxX, y: primitive.fill.maxY)),
+            bottomLeft: color(at: CGPoint(x: primitive.fill.minX, y: primitive.fill.maxY)),
+            viewport: viewport
+        )
+    }
+
+    private static func colorVector(_ color: NSColor) -> SIMD4<Float> {
+        let rgba = color.usingColorSpace(.deviceRGB) ?? color
+        return SIMD4(
+            Float(rgba.redComponent),
+            Float(rgba.greenComponent),
+            Float(rgba.blueComponent),
+            Float(rgba.alphaComponent)
+        )
+    }
+
+    private static func appendQuad(
+        into vertices: inout [ChartVertex],
+        rect: CGRect,
+        topLeft: SIMD4<Float>,
+        topRight: SIMD4<Float>,
+        bottomRight: SIMD4<Float>,
+        bottomLeft: SIMD4<Float>,
+        viewport: CGSize
+    ) {
         let left = Float(rect.minX / viewport.width * 2 - 1)
         let right = Float(rect.maxX / viewport.width * 2 - 1)
         let topPosition = Float(1 - rect.minY / viewport.height * 2)
         let bottomPosition = Float(1 - rect.maxY / viewport.height * 2)
-        let topLeftVertex = ChartVertex(position: SIMD2(left, topPosition), color: vector(topLeft))
-        let topRightVertex = ChartVertex(position: SIMD2(right, topPosition), color: vector(topRight))
-        let bottomRightVertex = ChartVertex(position: SIMD2(right, bottomPosition), color: vector(bottomRight))
-        let bottomLeftVertex = ChartVertex(position: SIMD2(left, bottomPosition), color: vector(bottomLeft))
-        return [topLeftVertex, topRightVertex, bottomRightVertex, topLeftVertex, bottomRightVertex, bottomLeftVertex]
+        let topLeftVertex = ChartVertex(position: SIMD2(left, topPosition), color: topLeft)
+        let topRightVertex = ChartVertex(position: SIMD2(right, topPosition), color: topRight)
+        let bottomRightVertex = ChartVertex(position: SIMD2(right, bottomPosition), color: bottomRight)
+        let bottomLeftVertex = ChartVertex(position: SIMD2(left, bottomPosition), color: bottomLeft)
+        vertices.append(topLeftVertex)
+        vertices.append(topRightVertex)
+        vertices.append(bottomRightVertex)
+        vertices.append(topLeftVertex)
+        vertices.append(bottomRightVertex)
+        vertices.append(bottomLeftVertex)
     }
 
     private static func makePipeline(device: MTLDevice) -> MTLRenderPipelineState? {
@@ -186,9 +243,34 @@ final class ChartRenderer: NSObject, MTKViewDelegate {
     }
 }
 
+struct ChartPresentedNote: Equatable {
+    var ghost: Bool
+    var longNote: Bool
+    var channel: String
+    var beat: Double
+    var endBeat: Double
+    var token: String
+    var contentRect: CGRect
+}
+
+fileprivate struct PresentedPaint {
+    var ghost: Bool
+    var selected: Bool
+    var colors: ThemeGradientColors
+    var shortNote: ChartNoteRect?
+    var longNote: ChartLongNoteRect?
+}
+
 @MainActor
 private final class ChartLabelOverlay: NSView {
     weak var surface: ChartSurfaceView?
+    private var cachedFonts: [FontCacheKey: NSFont] = [:]
+
+    private struct FontCacheKey: Hashable {
+        var name: String
+        var size: CGFloat
+        var bold: Bool
+    }
 
     override var isFlipped: Bool { true }
 
@@ -196,6 +278,7 @@ private final class ChartLabelOverlay: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         guard let surface else { return }
+        surface.rubberBandWasStroked = false
         let layout = surface.chartLayout
         let viewport = surface.viewport
 
@@ -255,20 +338,21 @@ private final class ChartLabelOverlay: NSView {
             layout.theme.visual.timeSelectionSelection.nsColor.setFill()
             fill.offsetBy(dx: -viewport.minX, dy: -viewport.minY).fill()
         }
-        for note in layout.visibleNoteRects(in: viewport) {
-            let colors = colors(for: note, layout: layout)
-            drawLegacyGradient(note, colors: colors, viewport: viewport)
-            drawNoteOutline(note.rect.offsetBy(dx: -viewport.minX, dy: -viewport.minY), color: colors.bright.nsColor)
-            if surface?.isSelected(note.event) == true {
-                drawSelectionOutline(note.selection.offsetBy(dx: -viewport.minX, dy: -viewport.minY), layout: layout)
-            }
-        }
-        for longNote in layout.visibleLongNoteRects(in: viewport) {
-            let colors = colors(for: longNote, layout: layout)
-            drawLegacyGradient(longNote, colors: colors, viewport: viewport)
-            drawNoteOutline(longNote.outline.offsetBy(dx: -viewport.minX, dy: -viewport.minY), color: colors.bright.nsColor)
-            if surface?.isSelected(longNote.note) == true {
-                drawSelectionOutline(longNote.selection.offsetBy(dx: -viewport.minX, dy: -viewport.minY), layout: layout)
+        if let surface {
+            for item in surface.currentPresentedPaint() {
+                if let note = item.shortNote {
+                    drawLegacyGradient(note, colors: item.colors, viewport: viewport)
+                    drawNoteOutline(note.rect.offsetBy(dx: -viewport.minX, dy: -viewport.minY), color: item.colors.bright.nsColor)
+                    if item.selected {
+                        drawSelectionOutline(note.selection.offsetBy(dx: -viewport.minX, dy: -viewport.minY), layout: layout)
+                    }
+                } else if let longNote = item.longNote {
+                    drawLegacyGradient(longNote, colors: item.colors, viewport: viewport)
+                    drawNoteOutline(longNote.outline.offsetBy(dx: -viewport.minX, dy: -viewport.minY), color: item.colors.bright.nsColor)
+                    if item.selected {
+                        drawSelectionOutline(longNote.selection.offsetBy(dx: -viewport.minX, dy: -viewport.minY), layout: layout)
+                    }
+                }
             }
         }
     }
@@ -290,6 +374,7 @@ private final class ChartLabelOverlay: NSView {
             path.stroke()
         }
         if let band = surface.bmsonRubberBandFrame() {
+            surface.rubberBandWasStroked = true
             layout.theme.visual.selectionBox.nsColor.setStroke()
             let path = NSBezierPath(rect: band.offsetBy(dx: -viewport.minX, dy: -viewport.minY))
             path.lineWidth = 1
@@ -401,7 +486,8 @@ private final class ChartLabelOverlay: NSView {
             .foregroundColor: layout.measureLabelColor
         ]
         let fontHeight = (attributes[.font] as? NSFont)?.pointSize ?? 9
-        for measure in layout.snapshot.measures {
+        let visible = layout.visibleMeasures(in: viewport, viewHeight: bounds.height, labelPadding: fontHeight + 16)
+        for measure in visible {
             let y = layout.y(forBeat: measure.start) - viewport.minY - fontHeight
             guard y > -16 && y < bounds.maxY else { continue }
             layout.measureCaption(for: measure).draw(at: CGPoint(x: -viewport.minX, y: y), withAttributes: attributes)
@@ -409,32 +495,30 @@ private final class ChartLabelOverlay: NSView {
     }
 
     private func drawNoteLabels(layout: ChartLayout, viewport: CGRect) {
-        for note in layout.visibleNoteRects(in: viewport) {
-            let lane = lane(for: note.event, layout: layout)
-            let attributes: [NSAttributedString.Key: Any] = [
-                .font: font(layout.theme.visual.noteFont),
-                .foregroundColor: lane?.textColor ?? NSColor.black
-            ]
-            surface?.noteCaption(token: note.event.token, channel: note.event.channel).draw(
-                at: CGPoint(x: note.labelOrigin.x - viewport.minX, y: note.labelOrigin.y - viewport.minY),
-                withAttributes: attributes
-            )
+        guard let surface else { return }
+        for item in surface.currentPresentedPaint() {
+            if let note = item.shortNote {
+                let lane = lane(for: note.event, layout: layout)
+                let attributes: [NSAttributedString.Key: Any] = [
+                    .font: font(layout.theme.visual.noteFont),
+                    .foregroundColor: lane?.textColor ?? NSColor.black
+                ]
+                surface.noteCaption(token: note.event.token, channel: note.event.channel).draw(
+                    at: CGPoint(x: note.labelOrigin.x - viewport.minX, y: note.labelOrigin.y - viewport.minY),
+                    withAttributes: attributes
+                )
+            } else if let longNote = item.longNote {
+                let lane = lane(for: longNote.note, layout: layout)
+                let attributes: [NSAttributedString.Key: Any] = [
+                    .font: font(layout.theme.visual.noteFont),
+                    .foregroundColor: lane?.longTextColor ?? NSColor.black
+                ]
+                surface.noteCaption(token: longNote.note.start.token, channel: longNote.note.channel).draw(
+                    at: CGPoint(x: longNote.labelOrigin.x - viewport.minX, y: longNote.labelOrigin.y - viewport.minY),
+                    withAttributes: attributes
+                )
+            }
         }
-        for longNote in layout.visibleLongNoteRects(in: viewport) {
-            let lane = lane(for: longNote.note, layout: layout)
-            let attributes: [NSAttributedString.Key: Any] = [
-                .font: font(layout.theme.visual.noteFont),
-                .foregroundColor: lane?.longTextColor ?? NSColor.black
-            ]
-            surface?.noteCaption(token: longNote.note.start.token, channel: longNote.note.channel).draw(
-                at: CGPoint(x: longNote.labelOrigin.x - viewport.minX, y: longNote.labelOrigin.y - viewport.minY),
-                withAttributes: attributes
-            )
-        }
-    }
-
-    private var fallbackColors: ThemeGradientColors {
-        ThemeGradientColors(bright: ThemeColor(argb: 0xFFFF00FF), dark: ThemeColor(argb: 0xFF7F007F))
     }
 
     private func lane(for event: ChartEventSnapshot, layout: ChartLayout) -> ChartLane? {
@@ -443,27 +527,6 @@ private final class ChartLabelOverlay: NSView {
 
     private func lane(for note: LongNoteSnapshot, layout: ChartLayout) -> ChartLane? {
         layout.lanes.first { $0.channel == layout.displayChannel(for: note.channel) }
-    }
-
-    private func colors(for note: ChartNoteRect, layout: ChartLayout) -> ThemeGradientColors {
-        painted(baseColors(for: note.event, layout: layout), identity: note.event.sourceLine)
-    }
-
-    private func colors(for longNote: ChartLongNoteRect, layout: ChartLayout) -> ThemeGradientColors {
-        let base = lane(for: longNote.note, layout: layout)?.longColors ?? fallbackColors
-        return painted(base, identity: longNote.note.start.sourceLine)
-    }
-
-    private func baseColors(for event: ChartEventSnapshot, layout: ChartLayout) -> ThemeGradientColors {
-        if event.kind == "mine" {
-            return ThemeGradientColors(bright: ThemeColor(argb: 0xFFFF0000), dark: ThemeColor(argb: 0xFFFF0000))
-        }
-        guard let lane = lane(for: event, layout: layout) else { return fallbackColors }
-        return event.kind == "hiddenNote" ? lane.hiddenColors : lane.normalColors
-    }
-
-    private func painted(_ colors: ThemeGradientColors, identity: Int) -> ThemeGradientColors {
-        surface?.paintedBmsonColors(colors, identity: identity) ?? colors
     }
 
     private func drawLegacyGradient(_ note: ChartNoteRect, colors: ThemeGradientColors, viewport: CGRect) {
@@ -508,11 +571,26 @@ private final class ChartLabelOverlay: NSView {
     }
 
     private func font(_ themeFont: ThemeFont) -> NSFont {
-        let base = NSFont(name: themeFont.name, size: themeFont.logicalPixelSize)
-            ?? .monospacedSystemFont(ofSize: themeFont.logicalPixelSize, weight: .regular)
-        guard themeFont.style & 1 != 0 else { return base }
-        let descriptor = base.fontDescriptor.withSymbolicTraits(base.fontDescriptor.symbolicTraits.union(.bold))
-        return NSFont(descriptor: descriptor, size: themeFont.logicalPixelSize) ?? base
+        let size = CGFloat(themeFont.logicalPixelSize)
+        let bold = themeFont.style & 1 != 0
+        let key = FontCacheKey(name: themeFont.name, size: size, bold: bold)
+        if let cached = cachedFonts[key] { return cached }
+        let base = NSFont(name: themeFont.name, size: size)
+            ?? .monospacedSystemFont(ofSize: size, weight: .regular)
+        let resolved: NSFont
+        if bold {
+            let descriptor = base.fontDescriptor.withSymbolicTraits(base.fontDescriptor.symbolicTraits.union(.bold))
+            resolved = NSFont(descriptor: descriptor, size: size) ?? base
+        } else {
+            resolved = base
+        }
+        cachedFonts[key] = resolved
+        return resolved
+    }
+
+    func drawFallbackForProbe() {
+        guard let surface else { return }
+        drawFallbackGeometry(layout: surface.chartLayout, viewport: surface.viewport)
     }
 }
 
@@ -606,6 +684,20 @@ final class ChartSurfaceView: NSView {
     private var pendingCtrlToggleEvent: ChartEventSnapshot?
     private var pendingCtrlToggleLong: LongNoteSnapshot?
     private var ctrlCopyPreview: (shorts: [ChartDuplicate.ShortCopy], longs: [ChartDuplicate.LongCopy])?
+    /// 选择工具拖动时的落点。松手前不写文档。
+    private var movePreview: (shorts: [ChartDuplicate.ShortCopy], longs: [ChartDuplicate.LongCopy])?
+    /// 长音端点拖动的预览。原长音先藏起来，避免原位和新长度叠在一起。
+    private var endpointPreview: LongNoteSnapshot?
+    /// 这次拖动已经把幽灵画进几何。结束时要再画一次文档里的音；已排队的刷新会合并掉。
+    private var dragPaintNeedsRestore = false
+    /// BMS 空白拖框。BMSON 仍用 `bmsonRubberBand`。
+    private var bmsMarqueeOrigin: CGPoint?
+    private var bmsMarqueeRect: CGRect?
+    private var lastViewMouse = CGPoint.zero
+    private var suppressNextMouseUp = false
+    private(set) var presentedNotes: [ChartPresentedNote] = []
+    private(set) var presentedPaintPasses = 0
+    fileprivate(set) var rubberBandWasStroked = false
 
     private var showsTwoPlayerColumns = true
     private var hiddenPlayChannels: Set<String> = []
@@ -1292,17 +1384,14 @@ final class ChartSurfaceView: NSView {
             bpmEvents: bpmEvents.map { ($0.vPosition, $0.value) },
             lockPosition: lock
         )
+        let samples = LegacyWaveform.SampleLookup(segments: segments, sampleRate: buffer.sampleRate)
         var rects: [CGRect] = []
         rects.reserveCapacity(count * 2)
         for index in 0..<count {
             let y = LegacyWaveform.pointY(index: index, precision: precision)
             let contentY = CGFloat(y) + viewport.minY
             let vpos = TimeSelection.vPosition(beat: chartLayout.beat(atY: contentY))
-            let sample = Int(LegacyWaveform.sampleIndex(
-                vPosition: vpos,
-                segments: segments,
-                sampleRate: buffer.sampleRate
-            ))
+            let sample = Int(samples.sampleIndex(vPosition: vpos))
             let leftX = sample >= 0 && sample < buffer.left.count
                 ? LegacyWaveform.pointX(sample: buffer.left[sample], width: buffer.width, left: buffer.leftInset)
                 : Double(buffer.leftInset)
@@ -1328,6 +1417,7 @@ final class ChartSurfaceView: NSView {
     }
 
     func cancelDrag() {
+        let restorePaint = dragPaintNeedsRestore
         dragSource = nil
         dragStartPoint = nil
         didDrag = false
@@ -1336,14 +1426,22 @@ final class ChartSurfaceView: NSView {
         pendingCtrlToggleEvent = nil
         pendingCtrlToggleLong = nil
         ctrlCopyPreview = nil
+        movePreview = nil
+        endpointPreview = nil
+        dragPaintNeedsRestore = false
         timeDragLine = nil
         timeStretchOrigin = nil
         bmsonRubberBand = nil
         bmsonRubberBandRect = nil
+        bmsMarqueeOrigin = nil
+        bmsMarqueeRect = nil
         if var cursor = bmsonCursor {
             cursor.rangeBegin = nil
             cursor.rangeEnd = nil
             bmsonCursor = cursor
+        }
+        if restorePaint {
+            rebuildGeometry()
         }
     }
 
@@ -1470,40 +1568,38 @@ final class ChartSurfaceView: NSView {
         return snapshot.events.filter { $0.token != "00" && !longLines.contains($0.sourceLine) }
     }
 
-    private func matchID(for event: ChartEventSnapshot) -> String {
-        "e:\(event.sourceLine):\(event.measure):\(event.channel):\(event.token):\(event.beat)"
-    }
-
-    private func matchID(for note: LongNoteSnapshot) -> String {
-        "ln:\(note.start.sourceLine):\(note.end.sourceLine):\(note.channel)"
-    }
-
     private func notesMatchingHoveredLabel(_ hoverToken: String) -> (
         events: [ChartEventSnapshot],
         longNotes: [LongNoteSnapshot]
     ) {
         let hoverFileName = wavFileName(forToken: hoverToken)
-        let events = selectableShortEvents()
-        let eventIDs = Set(LegacyLabelMatch.matchingNotes(
-            hoverToken: hoverToken,
-            hoverFileName: hoverFileName,
-            candidates: events.map {
-                LegacyLabelCandidate(id: matchID(for: $0), token: $0.token, fileName: wavFileName(forToken: $0.token))
-            },
-            showFileName: showFileNameEnabled
-        ).map(\.id))
-        let longIDs = Set(LegacyLabelMatch.matchingNotes(
-            hoverToken: hoverToken,
-            hoverFileName: hoverFileName,
-            candidates: longNotes.notes.map {
-                LegacyLabelCandidate(id: matchID(for: $0), token: $0.start.token, fileName: wavFileName(forToken: $0.start.token))
-            },
-            showFileName: showFileNameEnabled
-        ).map(\.id))
-        return (
-            events.filter { eventIDs.contains(matchID(for: $0)) },
-            longNotes.notes.filter { longIDs.contains(matchID(for: $0)) }
-        )
+        let showFileName = showFileNameEnabled
+        var fileNames: [String: String] = [hoverToken: hoverFileName]
+        func fileName(for token: String) -> String {
+            if let cached = fileNames[token] { return cached }
+            let name = wavFileName(forToken: token)
+            fileNames[token] = name
+            return name
+        }
+        let events = selectableShortEvents().filter { event in
+            LegacyLabelMatch.isLabelMatch(
+                hoverToken: hoverToken,
+                candidateToken: event.token,
+                showFileName: showFileName,
+                hoverFileName: hoverFileName,
+                candidateFileName: fileName(for: event.token)
+            )
+        }
+        let longs = longNotes.notes.filter { note in
+            LegacyLabelMatch.isLabelMatch(
+                hoverToken: hoverToken,
+                candidateToken: note.start.token,
+                showFileName: showFileName,
+                hoverFileName: hoverFileName,
+                candidateFileName: fileName(for: note.start.token)
+            )
+        }
+        return (events, longs)
     }
 
     /// 对照 `DoubleClickNoteIndex`。只在选择工具；没命中返回 false。
@@ -1568,11 +1664,13 @@ final class ChartSurfaceView: NSView {
         guard let plan = ctrlCopyPlan(at: point) else {
             if ctrlCopyPreview != nil {
                 ctrlCopyPreview = nil
+                dragPaintNeedsRestore = false
                 rebuildGeometry()
             }
             return
         }
         ctrlCopyPreview = plan
+        dragPaintNeedsRestore = true
         rebuildGeometry()
     }
 
@@ -1659,6 +1757,326 @@ final class ChartSurfaceView: NSView {
             )
         }
         return nil
+    }
+
+    fileprivate func currentPresentedPaint() -> [PresentedPaint] {
+        syncDragHideIndex()
+        var items: [PresentedPaint] = []
+        var summary: [ChartPresentedNote] = []
+        func addShort(_ note: ChartNoteRect, ghost: Bool, selected: Bool) {
+            let colors = paintedBmsonColors(metalBaseColors(for: note.event), identity: note.event.sourceLine)
+            items.append(PresentedPaint(
+                ghost: ghost,
+                selected: selected,
+                colors: colors,
+                shortNote: note,
+                longNote: nil
+            ))
+            summary.append(ChartPresentedNote(
+                ghost: ghost,
+                longNote: false,
+                channel: note.event.channel,
+                beat: note.event.beat,
+                endBeat: note.event.beat,
+                token: note.event.token,
+                contentRect: note.rect
+            ))
+        }
+        func addLong(_ note: ChartLongNoteRect, ghost: Bool, selected: Bool) {
+            let colors = paintedBmsonColors(metalLongColors(for: note.note), identity: note.note.start.sourceLine)
+            items.append(PresentedPaint(
+                ghost: ghost,
+                selected: selected,
+                colors: colors,
+                shortNote: nil,
+                longNote: note
+            ))
+            summary.append(ChartPresentedNote(
+                ghost: ghost,
+                longNote: true,
+                channel: note.note.channel,
+                beat: note.note.start.beat,
+                endBeat: note.note.end.beat,
+                token: note.note.start.token,
+                contentRect: note.outline
+            ))
+        }
+        for note in chartLayout.visibleNoteRects(in: viewport) where !hidesDraggedShort(note.event) {
+            addShort(note, ghost: false, selected: isSelected(note.event))
+        }
+        for note in chartLayout.visibleLongNoteRects(in: viewport) where !hidesDraggedLong(note.note) {
+            addLong(note, ghost: false, selected: isSelected(note.note))
+        }
+        for note in ghostShortRects() where note.rect.intersects(viewport) {
+            addShort(note, ghost: true, selected: true)
+        }
+        for note in ghostLongRects() where note.outline.intersects(viewport) || note.fill.intersects(viewport) {
+            addLong(note, ghost: true, selected: true)
+        }
+        presentedNotes = summary
+        presentedPaintPasses += 1
+        return items
+    }
+
+    private var draggedShortIdentities: Set<ChartEventSnapshot> = []
+    private var draggedLongIdentities: Set<LongNoteSnapshot> = []
+
+    private func syncDragHideIndex() {
+        guard didDrag, let movePreview else {
+            draggedShortIdentities = []
+            draggedLongIdentities = []
+            return
+        }
+        draggedShortIdentities = Set(movePreview.shorts.map(\.event))
+        draggedLongIdentities = Set(movePreview.longs.map(\.note))
+    }
+
+    private func hidesDraggedShort(_ event: ChartEventSnapshot) -> Bool {
+        guard didDrag, movePreview != nil else { return false }
+        return draggedShortIdentities.contains(event)
+    }
+
+    private func hidesDraggedLong(_ note: LongNoteSnapshot) -> Bool {
+        if didDrag, movePreview != nil, draggedLongIdentities.contains(note) {
+            return true
+        }
+        if didDrag, endpointPreview != nil, longDrag?.note == note, longDrag?.part != .body {
+            return true
+        }
+        return false
+    }
+
+    private func ghostShortRects() -> [ChartNoteRect] {
+        var copies: [ChartDuplicate.ShortCopy] = []
+        if let ctrlCopyPreview {
+            copies.append(contentsOf: ctrlCopyPreview.shorts)
+        }
+        if didDrag, let movePreview {
+            copies.append(contentsOf: movePreview.shorts)
+        }
+        return copies.compactMap { chartLayout.eventRect(ChartDuplicate.previewEvent($0)) }
+    }
+
+    private func ghostLongRects() -> [ChartLongNoteRect] {
+        var notes: [LongNoteSnapshot] = []
+        if let ctrlCopyPreview {
+            notes.append(contentsOf: ctrlCopyPreview.longs.map(ChartDuplicate.previewLong))
+        }
+        if didDrag, let movePreview {
+            notes.append(contentsOf: movePreview.longs.map(ChartDuplicate.previewLong))
+        }
+        if didDrag, let endpointPreview {
+            notes.append(endpointPreview)
+        }
+        return notes.compactMap { chartLayout.longNoteRect($0) }
+    }
+
+    private func activeAnchorOffset() -> CGFloat {
+        if let longDrag { return longDrag.anchorOffsetY }
+        return dragAnchorOffsetY
+    }
+
+    private func updateMovePreview(at point: CGPoint) {
+        let anchored = ChartInput.pointForAnchor(from: point, anchorOffsetY: activeAnchorOffset())
+        guard let plan = selectMovePlan(at: anchored) else {
+            if movePreview != nil {
+                movePreview = nil
+                dragPaintNeedsRestore = false
+                rebuildGeometry()
+            }
+            return
+        }
+        movePreview = plan
+        endpointPreview = nil
+        dragPaintNeedsRestore = true
+        rebuildGeometry()
+    }
+
+    private func updateEndpointPreview(at point: CGPoint) {
+        guard let preview = endpointPreviewNote(at: point) else {
+            if endpointPreview != nil {
+                endpointPreview = nil
+                dragPaintNeedsRestore = false
+                rebuildGeometry()
+            }
+            return
+        }
+        endpointPreview = preview
+        movePreview = nil
+        dragPaintNeedsRestore = true
+        rebuildGeometry()
+    }
+
+    private func endpointBeats(for drag: LongNoteDrag, at point: CGPoint) -> (start: Double, end: Double)? {
+        guard drag.part != .body else { return nil }
+        let anchor = ChartInput.pointForAnchor(from: point, anchorOffsetY: drag.anchorOffsetY)
+        let beat: Double
+        if appliesBmsonSnap {
+            beat = BmsonChartMapping.beat(
+                pulse: bmsonWritePulse(at: anchor, snap: snapEnabled),
+                resolution: bmsonResolution
+            )
+        } else {
+            guard let target = snapTarget(at: anchor, lockingBeat: nil) else { return nil }
+            beat = target.measure.start + Double(target.slot) * 4.0 / Double(max(1, chartLayout.division))
+        }
+        let start = drag.part == .startCap ? beat : drag.note.start.beat
+        let end = drag.part == .endCap ? beat : drag.note.end.beat
+        return (start, end)
+    }
+
+    private func endpointPreviewNote(at point: CGPoint) -> LongNoteSnapshot? {
+        guard let drag = longDrag, let beats = endpointBeats(for: drag, at: point) else { return nil }
+        let start = beats.start
+        let end = beats.end
+        if end - start <= 0.000_001 { return nil }
+        if abs(start - drag.note.start.beat) < 0.000_001 && abs(end - drag.note.end.beat) < 0.000_001 {
+            return nil
+        }
+        return LongNoteSnapshot(
+            channel: drag.note.channel,
+            start: LongNoteEndpointSnapshot(
+                measure: drag.note.start.measure,
+                fractionNumerator: drag.note.start.fractionNumerator,
+                fractionDenominator: drag.note.start.fractionDenominator,
+                beat: start,
+                token: drag.note.start.token,
+                sourceLine: -1
+            ),
+            end: LongNoteEndpointSnapshot(
+                measure: drag.note.end.measure,
+                fractionNumerator: drag.note.end.fractionNumerator,
+                fractionDenominator: drag.note.end.fractionDenominator,
+                beat: end,
+                token: drag.note.end.token,
+                sourceLine: -2
+            ),
+            encoding: drag.note.encoding
+        )
+    }
+
+    private func clearTransientPreviews() {
+        let hadPreview = movePreview != nil || endpointPreview != nil || ctrlCopyPreview != nil
+        movePreview = nil
+        endpointPreview = nil
+        ctrlCopyPreview = nil
+        if hadPreview {
+            dragPaintNeedsRestore = false
+            rebuildGeometry()
+        }
+    }
+
+    private func refreshSelectDragPresentation(at point: CGPoint) {
+        guard tool == .select else { return }
+        if !didDrag {
+            clearTransientPreviews()
+            return
+        }
+        if pendingCtrlToggleEvent != nil || pendingCtrlToggleLong != nil {
+            updateCtrlCopyPreview(at: point)
+            return
+        }
+        if bmsMarqueeOrigin != nil {
+            updateBmsMarquee(to: point)
+            return
+        }
+        if bmsonRubberBand != nil {
+            updateBmsonRubberBand(at: point)
+            return
+        }
+        if let longDrag, longDrag.part != .body {
+            updateEndpointPreview(at: point)
+            return
+        }
+        if dragSource != nil || longDrag?.part == .body {
+            updateMovePreview(at: point)
+        }
+    }
+
+    private func chartPoint(forView view: CGPoint) -> CGPoint {
+        CGPoint(x: view.x + offset.x, y: view.y + offset.y)
+    }
+
+    func synchronizePresentation() {
+        geometryRebuildScheduled = false
+        performGeometryRebuild()
+        labels.display()
+    }
+
+    /// 有 Metal 时正常刷新不走回退身体。探测另画一次回退路径，确认它和金属用同一份音符。
+    func exerciseFallbackPaint() {
+        viewport = CGRect(origin: offset, size: bounds.size)
+        let pixelsWide = max(Int(bounds.width.rounded(.towardZero)), 1)
+        let pixelsHigh = max(Int(bounds.height.rounded(.towardZero)), 1)
+        guard let rep = NSBitmapImageRep(
+            bitmapDataPlanes: nil,
+            pixelsWide: pixelsWide,
+            pixelsHigh: pixelsHigh,
+            bitsPerSample: 8,
+            samplesPerPixel: 4,
+            hasAlpha: true,
+            isPlanar: false,
+            colorSpaceName: .deviceRGB,
+            bytesPerRow: 0,
+            bitsPerPixel: 0
+        ) else {
+            labels.drawFallbackForProbe()
+            return
+        }
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+        labels.drawFallbackForProbe()
+        NSGraphicsContext.restoreGraphicsState()
+    }
+
+    /// 框选边在覆盖层上。返回边框附近非透明像素数，用来确认这条绘制真的发生了。
+    func rubberBandBitmapHitCount() -> Int {
+        guard let band = bmsonRubberBandFrame(), bounds.width > 1, bounds.height > 1 else { return 0 }
+        let pixelsWide = max(Int(bounds.width.rounded(.towardZero)), 1)
+        let pixelsHigh = max(Int(bounds.height.rounded(.towardZero)), 1)
+        guard let rep = NSBitmapImageRep(
+            bitmapDataPlanes: nil,
+            pixelsWide: pixelsWide,
+            pixelsHigh: pixelsHigh,
+            bitsPerSample: 8,
+            samplesPerPixel: 4,
+            hasAlpha: true,
+            isPlanar: false,
+            colorSpaceName: .deviceRGB,
+            bytesPerRow: 0,
+            bitsPerPixel: 0
+        ) else { return 0 }
+        labels.cacheDisplay(in: labels.bounds, to: rep)
+        let viewBand = band.offsetBy(dx: -viewport.minX, dy: -viewport.minY)
+        let guideY = mouseGuideY.map { Int(($0 - viewport.minY).rounded(.towardZero)) }
+        func isStroke(_ color: NSColor?) -> Bool {
+            guard let color, let rgb = color.usingColorSpace(.deviceRGB) else { return false }
+            return rgb.alphaComponent > 0.2
+                && rgb.redComponent > 0.55
+                && rgb.greenComponent > 0.55
+                && rgb.blueComponent > 0.55
+        }
+        func hits(atX x: Int, y: Int) -> Bool {
+            guard x >= 0, y >= 0, x < pixelsWide, y < pixelsHigh else { return false }
+            if let guideY, abs(y - guideY) <= 2 || abs(y - (pixelsHigh - 1 - guideY)) <= 2 {
+                return false
+            }
+            return isStroke(rep.colorAt(x: x, y: y))
+                || isStroke(rep.colorAt(x: x, y: pixelsHigh - 1 - y))
+        }
+        var count = 0
+        let left = Int(viewBand.minX.rounded(.towardZero))
+        let right = Int(viewBand.maxX.rounded(.towardZero))
+        let top = Int(viewBand.minY.rounded(.towardZero))
+        let bottom = Int(viewBand.maxY.rounded(.towardZero))
+        var y = top
+        while y <= bottom {
+            if hits(atX: left, y: y) || hits(atX: left + 1, y: y) || hits(atX: right, y: y) || hits(atX: right - 1, y: y) {
+                count += 1
+            }
+            y += 3
+        }
+        return count
     }
 
     private func selectCopiedNotes(_ preview: (shorts: [ChartDuplicate.ShortCopy], longs: [ChartDuplicate.LongCopy])) {
@@ -1852,6 +2270,69 @@ final class ChartSurfaceView: NSView {
     }
 
     @discardableResult
+    private func beginSelectRubberBand(at point: CGPoint) -> Bool {
+        if appliesBmsonSnap {
+            return beginBmsonRubberBand(at: point)
+        }
+        guard tool == .select else { return false }
+        guard chartLayout.hitTest(point) == nil, chartLayout.hitTestLongNote(point) == nil else {
+            return false
+        }
+        bmsMarqueeOrigin = point
+        bmsMarqueeRect = nil
+        if dragStartPoint == nil {
+            dragStartPoint = point
+        }
+        return true
+    }
+
+    private func updateBmsMarquee(to point: CGPoint) {
+        guard let origin = bmsMarqueeOrigin else { return }
+        bmsMarqueeRect = ChartInput.marqueeRect(from: origin, to: point)
+        labels.needsDisplay = true
+    }
+
+    private func commitBmsMarquee(shift: Bool) {
+        guard let rect = bmsMarqueeRect else { return }
+        let pairedLines = Set(longNotes.notes.flatMap { [$0.start.sourceLine, $0.end.sourceLine] })
+        var events = selectedEvents
+        if let selectedEvent { events.insert(selectedEvent) }
+        var longs = selectedLongNotes
+        if let selectedLongNote { longs.insert(selectedLongNote) }
+        for note in longNotes.notes {
+            guard let painted = chartLayout.longNoteRect(note) else { continue }
+            let hit = painted.outline.intersects(rect)
+                || painted.fill.intersects(rect)
+                || painted.startCap.intersects(rect)
+                || painted.endCap.intersects(rect)
+            guard hit else { continue }
+            if shift {
+                if longs.contains(note) {
+                    longs.remove(note)
+                } else {
+                    longs.insert(note)
+                }
+            } else {
+                longs.insert(note)
+            }
+        }
+        for event in snapshot.events {
+            if pairedLines.contains(event.sourceLine) { continue }
+            guard let painted = chartLayout.eventRect(event), painted.rect.intersects(rect) else { continue }
+            if shift {
+                if events.contains(event) {
+                    events.remove(event)
+                } else {
+                    events.insert(event)
+                }
+            } else {
+                events.insert(event)
+            }
+        }
+        applySelection(events: events, longNotes: longs)
+    }
+
+    @discardableResult
     private func beginBmsonRubberBand(at point: CGPoint) -> Bool {
         guard appliesBmsonSnap, tool == .select else { return false }
         guard chartLayout.hitTest(point) == nil, chartLayout.hitTestLongNote(point) == nil else {
@@ -2026,7 +2507,13 @@ final class ChartSurfaceView: NSView {
 
     func bmsonRubberBandFrame() -> CGRect? {
         guard didDrag else { return nil }
-        return bmsonRubberBandRect
+        if bmsonRubberBand != nil {
+            return bmsonRubberBandRect
+        }
+        if bmsMarqueeOrigin != nil {
+            return bmsMarqueeRect
+        }
+        return nil
     }
 
     private func selectNotes(in selection: TimeSelection) {
@@ -2087,7 +2574,9 @@ final class ChartSurfaceView: NSView {
             return
         }
         let view = viewPoint(for: event)
+        lastViewMouse = view
         lastViewMouseX = view.x
+        suppressNextMouseUp = false
         if handleMiniMapMouseDown(at: view) {
             return
         }
@@ -2114,7 +2603,7 @@ final class ChartSurfaceView: NSView {
             if tool == .select {
                 handleSelectModifierClick(at: point, shift: shift)
                 if chartLayout.hitTest(point) == nil && chartLayout.hitTestLongNote(point) == nil {
-                    beginBmsonRubberBand(at: point)
+                    beginSelectRubberBand(at: point)
                 }
                 return
             }
@@ -2190,7 +2679,7 @@ final class ChartSurfaceView: NSView {
                 selectedEvent = nil
                 dragSource = nil
                 longDrag = nil
-                beginBmsonRubberBand(at: point)
+                beginSelectRubberBand(at: point)
             }
             dragStartPoint = point
             didDrag = false
@@ -2200,6 +2689,7 @@ final class ChartSurfaceView: NSView {
 
     override func mouseDragged(with event: NSEvent) {
         let view = viewPoint(for: event)
+        lastViewMouse = view
         lastViewMouseX = view.x
         if handleMiniMapMouseDragged(at: view) {
             return
@@ -2220,14 +2710,13 @@ final class ChartSurfaceView: NSView {
         }
         guard let dragStartPoint else { return }
         didDrag = ChartInput.isDrag(from: dragStartPoint, to: point)
-        if tool == .select, didDrag, pendingCtrlToggleEvent != nil || pendingCtrlToggleLong != nil {
-            updateCtrlCopyPreview(at: point)
-        }
+        refreshSelectDragPresentation(at: point)
         updatePointerState(at: point)
     }
 
     override func mouseMoved(with event: NSEvent) {
         let view = viewPoint(for: event)
+        lastViewMouse = view
         let wasShowing = currentMiniMapFrame() != nil
         lastViewMouseX = view.x
         if (currentMiniMapFrame() != nil) != wasShowing {
@@ -2285,6 +2774,10 @@ final class ChartSurfaceView: NSView {
             return
         }
         defer { cancelDrag() }
+        if suppressNextMouseUp {
+            suppressNextMouseUp = false
+            return
+        }
         if tool == .timeSelect {
             commitTimeStretchIfNeeded()
         }
@@ -2310,6 +2803,16 @@ final class ChartSurfaceView: NSView {
             updatePointerState(at: point)
             return
         }
+        if bmsMarqueeOrigin != nil {
+            if didDrag {
+                updateBmsMarquee(to: point)
+                commitBmsMarquee(shift: event.modifierFlags.contains(.shift))
+            }
+            bmsMarqueeOrigin = nil
+            bmsMarqueeRect = nil
+            updatePointerState(at: point)
+            return
+        }
         guard tool == .select, didDrag else { return }
         if pendingCtrlToggleEvent != nil || pendingCtrlToggleLong != nil {
             commitCtrlCopyIfNeeded(at: point)
@@ -2327,9 +2830,12 @@ final class ChartSurfaceView: NSView {
             anchorOffset = dragAnchorOffsetY
         }
         let anchorPoint = ChartInput.pointForAnchor(from: point, anchorOffsetY: anchorOffset)
-        if let plan = selectMovePlan(at: anchorPoint), let moveBatchAtVPositionRequested {
-            guard moveBatchAtVPositionRequested(plan.shorts, plan.longs) else { return }
-            selectCopiedNotes(plan)
+        if moveBatchAtVPositionRequested != nil,
+           dragSource != nil || longDrag?.part == .body {
+            if let plan = selectMovePlan(at: anchorPoint) {
+                guard moveBatchAtVPositionRequested?(plan.shorts, plan.longs) == true else { return }
+                selectCopiedNotes(plan)
+            }
             return
         }
         guard let source = dragSource else {
@@ -2456,6 +2962,7 @@ final class ChartSurfaceView: NSView {
             return
         }
         if event.keyCode == 53 {
+            suppressNextMouseUp = dragStartPoint != nil
             cancelDrag()
             rebuildGeometry()
             hoverDidChange?()
@@ -2617,12 +3124,21 @@ final class ChartSurfaceView: NSView {
             return
         }
         if event.hasPreciseScrollingDeltas {
-            setOffset(CGPoint(x: offset.x - event.scrollingDeltaX, y: offset.y - event.scrollingDeltaY))
+            applyWheelScroll(deltaX: event.scrollingDeltaX, deltaY: event.scrollingDeltaY)
             return
         }
         let vertical = event.scrollingDeltaY == 0 ? 0 : (event.scrollingDeltaY > 0 ? wheelStep : -wheelStep)
         let horizontal = event.scrollingDeltaX == 0 ? 0 : (event.scrollingDeltaX > 0 ? wheelStep : -wheelStep)
-        setOffset(CGPoint(x: offset.x - horizontal, y: offset.y - vertical))
+        applyWheelScroll(deltaX: horizontal, deltaY: vertical)
+    }
+
+    private func applyWheelScroll(deltaX: CGFloat, deltaY: CGFloat) {
+        setOffset(CGPoint(x: offset.x - deltaX, y: offset.y - deltaY))
+        guard let dragStartPoint, tool == .select else { return }
+        let point = chartPoint(forView: lastViewMouse)
+        didDrag = ChartInput.isDrag(from: dragStartPoint, to: point)
+        refreshSelectDragPresentation(at: point)
+        updatePointerState(at: point)
     }
 
     @discardableResult
@@ -2814,8 +3330,67 @@ final class ChartSurfaceView: NSView {
         }
     }
 
+    private struct HoverOutlineKey: Equatable {
+        var token: String
+        var channel: String
+        var beat: Double
+        var longNote: Bool
+        var endPen: Bool
+        var multiselect: Bool
+    }
+
+    private func hoverOutlineKey() -> HoverOutlineKey? {
+        let flags = NSEvent.modifierFlags
+        let multiselect = LegacyLabelMatch.modifierMultiselectActive(
+            control: flags.contains(.control),
+            shift: flags.contains(.shift)
+        )
+        if let note = hoverLongNote {
+            return HoverOutlineKey(
+                token: note.start.token,
+                channel: note.channel,
+                beat: note.start.beat,
+                longNote: true,
+                endPen: hoverUsesEndPen,
+                multiselect: multiselect
+            )
+        }
+        if let event = hoverEvent {
+            return HoverOutlineKey(
+                token: event.token,
+                channel: event.channel,
+                beat: event.beat,
+                longNote: false,
+                endPen: false,
+                multiselect: multiselect
+            )
+        }
+        return nil
+    }
+
+    private struct PendingLongStartKey: Equatable {
+        var channel: String
+        var measure: Int
+        var slot: Int
+    }
+
+    private func pendingLongStartKey() -> PendingLongStartKey? {
+        guard let pending = pendingLongWrite else { return nil }
+        return PendingLongStartKey(
+            channel: pending.channel,
+            measure: pending.target.measure.measure,
+            slot: pending.target.slot
+        )
+    }
+
     private func updatePointerState(at point: CGPoint) {
         let previousLane = hoverLaneChannel
+        let previousGuide = mouseGuideY
+        let previousHover = hoverOutlineKey()
+        let previousTimeHover = timeHoverLine
+        let previousCursor = bmsonCursor
+        let previousPending = pendingLongStartKey()
+        let previousMove = movePreview
         hoverLaneChannel = chartLayout.lane(at: point)?.channel
         updateBmsonCursor(at: point)
         let snapped = resolvedVPosition(at: point, snap: snapEnabled)
@@ -2856,10 +3431,18 @@ final class ChartSurfaceView: NSView {
         } else {
             timeHoverLine = .none
         }
-        // 列底色属于 Metal 静态层，只在跨列时重建；其余悬停都在覆盖层完成。
-        if previousLane != hoverLaneChannel {
+        let laneChanged = previousLane != hoverLaneChannel
+        let hoverChanged = hoverOutlineKey() != previousHover
+        let pendingChanged = pendingLongStartKey() != previousPending
+        let moveChanged = movePreview?.shorts != previousMove?.shorts
+            || movePreview?.longs != previousMove?.longs
+        let indicatorChanged = mouseGuideY != previousGuide
+            || timeHoverLine != previousTimeHover
+            || bmsonCursor != previousCursor
+        // 列底色属于 Metal 静态层，只在跨列时重建。空白处微移不重画文字。
+        if laneChanged {
             rebuildGeometry()
-        } else {
+        } else if hoverChanged || pendingChanged || moveChanged || indicatorChanged {
             labels.needsDisplay = true
         }
         hoverDidChange?()
@@ -3127,6 +3710,12 @@ final class ChartSurfaceView: NSView {
             unsupportedGesture?(longNotes.editingReason)
             return
         }
+        if drag.part != .body {
+            guard let beats = endpointBeats(for: drag, at: point),
+                  beats.end - beats.start > 0.000_001 else {
+                return
+            }
+        }
         let anchorPoint = ChartInput.pointForAnchor(from: point, anchorOffsetY: drag.anchorOffsetY)
         let lockBeat = drag.part == .body ? drag.note.start.beat : nil
         let sourceLines = longSourceLines()
@@ -3349,35 +3938,16 @@ final class ChartSurfaceView: NSView {
         if let fill = timeSelectionFill() {
             quads.append((fill.offsetBy(dx: -viewport.minX, dy: -viewport.minY), chartLayout.theme.visual.timeSelectionSelection.nsColor))
         }
-        for note in chartLayout.visibleNoteRects(in: viewport) {
-            let colors = paintedBmsonColors(metalBaseColors(for: note.event), identity: note.event.sourceLine)
-            appendGradient(fill: note.fill, start: note.gradientStart, end: note.gradientEnd, colors: colors, outline: note.rect)
-            if isSelected(note.event) {
-                appendBox(note.selection.offsetBy(dx: -viewport.minX, dy: -viewport.minY), color: chartLayout.theme.visual.noteSelected.nsColor)
-            }
-        }
-        for longNote in chartLayout.visibleLongNoteRects(in: viewport) {
-            let colors = paintedBmsonColors(metalLongColors(for: longNote.note), identity: longNote.note.start.sourceLine)
-            appendGradient(fill: longNote.fill, start: longNote.gradientStart, end: longNote.gradientEnd, colors: colors, outline: longNote.outline)
-            if isSelected(longNote.note) {
-                appendBox(longNote.selection.offsetBy(dx: -viewport.minX, dy: -viewport.minY), color: chartLayout.theme.visual.noteSelected.nsColor)
-            }
-        }
-        if let preview = ctrlCopyPreview {
-            for copy in preview.shorts {
-                let event = ChartDuplicate.previewEvent(copy)
-                if let painted = chartLayout.eventRect(event) {
-                    let colors = paintedBmsonColors(metalBaseColors(for: event), identity: event.sourceLine)
-                    appendGradient(fill: painted.fill, start: painted.gradientStart, end: painted.gradientEnd, colors: colors, outline: painted.rect)
-                    appendBox(painted.selection.offsetBy(dx: -viewport.minX, dy: -viewport.minY), color: chartLayout.theme.visual.noteSelected.nsColor)
+        for item in currentPresentedPaint() {
+            if let note = item.shortNote {
+                appendGradient(fill: note.fill, start: note.gradientStart, end: note.gradientEnd, colors: item.colors, outline: note.rect)
+                if item.selected {
+                    appendBox(note.selection.offsetBy(dx: -viewport.minX, dy: -viewport.minY), color: chartLayout.theme.visual.noteSelected.nsColor)
                 }
-            }
-            for copy in preview.longs {
-                let note = ChartDuplicate.previewLong(copy)
-                if let painted = chartLayout.longNoteRect(note) {
-                    let colors = paintedBmsonColors(metalLongColors(for: note), identity: note.start.sourceLine)
-                    appendGradient(fill: painted.fill, start: painted.gradientStart, end: painted.gradientEnd, colors: colors, outline: painted.outline)
-                    appendBox(painted.selection.offsetBy(dx: -viewport.minX, dy: -viewport.minY), color: chartLayout.theme.visual.noteSelected.nsColor)
+            } else if let longNote = item.longNote {
+                appendGradient(fill: longNote.fill, start: longNote.gradientStart, end: longNote.gradientEnd, colors: item.colors, outline: longNote.outline)
+                if item.selected {
+                    appendBox(longNote.selection.offsetBy(dx: -viewport.minX, dy: -viewport.minY), color: chartLayout.theme.visual.noteSelected.nsColor)
                 }
             }
         }

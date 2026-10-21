@@ -278,9 +278,11 @@ private:
         JsonValue value;
         value.kind = JsonValue::Kind::number;
         value.text = std::string(text_.substr(start, pos_ - start));
-        try {
-            value.number = std::stod(value.text);
-        } catch (const std::exception&) {
+        std::istringstream stream(value.text);
+        stream.imbue(std::locale::classic());
+        stream >> value.number;
+        char trailing = 0;
+        if (!stream || stream >> trailing) {
             throw BmsonParseError("BMSON JSON number is out of range");
         }
         if (!std::isfinite(value.number)) {
@@ -329,9 +331,17 @@ private:
             case 't':
                 result.push_back('\t');
                 break;
-            case 'u':
-                append_utf8(result, parse_hex4());
+            case 'u': {
+                const unsigned code = parse_hex4();
+                unsigned low = 0;
+                if (code >= 0xD800 && code <= 0xDBFF && take_low_surrogate(low)) {
+                    const unsigned scalar = 0x10000u + (((code - 0xD800u) << 10) | (low - 0xDC00u));
+                    append_utf8(result, scalar);
+                    break;
+                }
+                append_utf8(result, code);
                 break;
+            }
             default:
                 throw BmsonParseError("invalid escape in BMSON JSON string");
             }
@@ -357,6 +367,33 @@ private:
         return code;
     }
 
+    bool take_low_surrogate(unsigned& low)
+    {
+        if (pos_ + 6 > text_.size() || text_[pos_] != '\\' || text_[pos_ + 1] != 'u') {
+            return false;
+        }
+        unsigned code = 0;
+        for (int index = 0; index < 4; ++index) {
+            const char ch = text_[pos_ + 2 + static_cast<std::size_t>(index)];
+            code <<= 4;
+            if (ch >= '0' && ch <= '9') {
+                code += static_cast<unsigned>(ch - '0');
+            } else if (ch >= 'a' && ch <= 'f') {
+                code += static_cast<unsigned>(ch - 'a' + 10);
+            } else if (ch >= 'A' && ch <= 'F') {
+                code += static_cast<unsigned>(ch - 'A' + 10);
+            } else {
+                return false;
+            }
+        }
+        if (code < 0xDC00 || code > 0xDFFF) {
+            return false;
+        }
+        low = code;
+        pos_ += 6;
+        return true;
+    }
+
     static void append_utf8(std::string& out, unsigned code)
     {
         if (code <= 0x7F) {
@@ -364,8 +401,13 @@ private:
         } else if (code <= 0x7FF) {
             out.push_back(static_cast<char>(0xC0 | (code >> 6)));
             out.push_back(static_cast<char>(0x80 | (code & 0x3F)));
-        } else {
+        } else if (code <= 0xFFFF) {
             out.push_back(static_cast<char>(0xE0 | (code >> 12)));
+            out.push_back(static_cast<char>(0x80 | ((code >> 6) & 0x3F)));
+            out.push_back(static_cast<char>(0x80 | (code & 0x3F)));
+        } else if (code <= 0x10FFFF) {
+            out.push_back(static_cast<char>(0xF0 | (code >> 18)));
+            out.push_back(static_cast<char>(0x80 | ((code >> 12) & 0x3F)));
             out.push_back(static_cast<char>(0x80 | ((code >> 6) & 0x3F)));
             out.push_back(static_cast<char>(0x80 | (code & 0x3F)));
         }
@@ -660,6 +702,166 @@ void parse_bga_events(
     }
 }
 
+template <typename Note>
+[[nodiscard]] std::optional<std::size_t> find_note_y(const std::vector<Note>& notes, std::int64_t y)
+{
+    for (std::size_t i = 0; i < notes.size(); ++i) {
+        if (notes[i].y == y) {
+            return i;
+        }
+    }
+    return std::nullopt;
+}
+
+[[nodiscard]] std::optional<std::size_t> find_channel_name(
+    const std::vector<BmsonSoundChannel>& channels, std::string_view name)
+{
+    for (std::size_t i = 0; i < channels.size(); ++i) {
+        if (channels[i].name == name) {
+            return i;
+        }
+    }
+    return std::nullopt;
+}
+
+void ingest_bpm_notes(
+    const JsonValue* notes,
+    std::string_view field,
+    std::vector<BmsonBpmNote>& dest,
+    std::vector<ExtraJson>& dest_extras,
+    bool keep_existing_y)
+{
+    if (notes == nullptr) {
+        return;
+    }
+    if (notes->kind != JsonValue::Kind::array) {
+        throw BmsonParseError(std::string(field) + " must be an array");
+    }
+    for (const auto& item : notes->array) {
+        if (item.kind != JsonValue::Kind::object) {
+            throw BmsonParseError(std::string(field) + " entries must be objects");
+        }
+        BmsonBpmNote note;
+        note.y = require_pulse(find_field(item, "y"), 0, field);
+        note.v = require_number(find_field_any(item, {"v", "bpm"}), 0.0, field);
+        ExtraJson extra;
+        take_extras(item, {"y", "v", "bpm"}, extra);
+        if (keep_existing_y && find_note_y(dest, note.y)) {
+            continue;
+        }
+        dest.push_back(note);
+        dest_extras.push_back(std::move(extra));
+    }
+}
+
+void ingest_stop_notes(
+    const JsonValue* notes,
+    std::string_view field,
+    std::vector<BmsonStopNote>& dest,
+    std::vector<ExtraJson>& dest_extras,
+    bool keep_existing_y)
+{
+    if (notes == nullptr) {
+        return;
+    }
+    if (notes->kind != JsonValue::Kind::array) {
+        throw BmsonParseError(std::string(field) + " must be an array");
+    }
+    for (const auto& item : notes->array) {
+        if (item.kind != JsonValue::Kind::object) {
+            throw BmsonParseError(std::string(field) + " entries must be objects");
+        }
+        BmsonStopNote note;
+        note.y = require_pulse(find_field(item, "y"), 0, field);
+        note.v = require_number(find_field_any(item, {"v", "duration"}), 0.0, field);
+        ExtraJson extra;
+        take_extras(item, {"y", "v", "duration"}, extra);
+        if (keep_existing_y && find_note_y(dest, note.y)) {
+            continue;
+        }
+        dest.push_back(note);
+        dest_extras.push_back(std::move(extra));
+    }
+}
+
+void parse_sound_channel_object(
+    const JsonValue& item,
+    std::string_view field,
+    BmsonSoundChannel& channel,
+    ExtraJson& channel_extra,
+    std::vector<ExtraJson>& note_extras)
+{
+    channel.name = require_string(find_field(item, "name"), field);
+    if (const JsonValue* notes = find_field(item, "notes")) {
+        if (notes->kind != JsonValue::Kind::array) {
+            throw BmsonParseError(std::string(field) + " notes must be an array");
+        }
+        for (const auto& note_value : notes->array) {
+            if (note_value.kind != JsonValue::Kind::object) {
+                throw BmsonParseError(std::string(field) + " notes entries must be objects");
+            }
+            BmsonNote note;
+            note.x = require_pulse(find_field(note_value, "x"), 0, "notes.x");
+            note.y = require_pulse(find_field(note_value, "y"), 0, "notes.y");
+            note.l = require_pulse(find_field(note_value, "l"), 0, "notes.l");
+            if (note.l < 0) {
+                throw BmsonParseError("notes.l must not be negative");
+            }
+            note.c = require_bool(find_field(note_value, "c"), false, "notes.c");
+            ExtraJson extra;
+            take_extras(note_value, {"x", "y", "l", "c"}, extra);
+            channel.notes.push_back(note);
+            note_extras.push_back(std::move(extra));
+        }
+    }
+    take_extras(item, {"name", "notes"}, channel_extra);
+}
+
+void ingest_sound_channels(
+    const JsonValue* channels,
+    std::string_view field,
+    std::vector<BmsonSoundChannel>& dest,
+    std::vector<ExtraJson>& dest_channel_extras,
+    std::vector<std::vector<ExtraJson>>& dest_note_extras,
+    bool merge_by_name)
+{
+    if (channels == nullptr) {
+        return;
+    }
+    if (channels->kind != JsonValue::Kind::array) {
+        throw BmsonParseError(std::string(field) + " must be an array");
+    }
+    for (const auto& item : channels->array) {
+        if (item.kind != JsonValue::Kind::object) {
+            throw BmsonParseError(std::string(field) + " entries must be objects");
+        }
+        BmsonSoundChannel channel;
+        ExtraJson channel_extra;
+        std::vector<ExtraJson> note_extras;
+        parse_sound_channel_object(item, field, channel, channel_extra, note_extras);
+        if (merge_by_name) {
+            if (const auto existing = find_channel_name(dest, channel.name)) {
+                auto& dest_notes = dest[*existing].notes;
+                if (dest_note_extras.size() <= *existing) {
+                    dest_note_extras.resize(*existing + 1);
+                }
+                auto& dest_extras = dest_note_extras[*existing];
+                for (std::size_t i = 0; i < channel.notes.size(); ++i) {
+                    if (find_note_y(dest_notes, channel.notes[i].y)) {
+                        continue;
+                    }
+                    dest_notes.push_back(channel.notes[i]);
+                    dest_extras.push_back(std::move(note_extras[i]));
+                }
+                continue;
+            }
+        }
+        dest.push_back(std::move(channel));
+        dest_channel_extras.push_back(std::move(channel_extra));
+        dest_note_extras.push_back(std::move(note_extras));
+    }
+}
+
 void append_field(std::vector<std::pair<std::string, std::string>>& fields, std::string key, std::string value)
 {
     fields.emplace_back(std::move(key), std::move(value));
@@ -789,14 +991,18 @@ BmsonDocument BmsonDocument::from_json(std::string_view text)
         document.info_.subtitle = require_string(find_field(info_object, "subtitle"), "subtitle");
         document.info_.artist = require_string(find_field(info_object, "artist"), "artist");
         document.info_.genre = require_string(find_field(info_object, "genre"), "genre");
-        document.info_.mode_hint = require_string(find_field(info_object, "modeHint"), "modeHint");
+        document.info_.mode_hint = require_string(
+            find_field_any(info_object, {"modeHint", "mode_hint"}), "modeHint");
         if (document.info_.mode_hint.empty()) {
             document.info_.mode_hint = "beat-7k";
         }
-        document.info_.chart_name = require_string(find_field(info_object, "chartName"), "chartName");
+        document.info_.chart_name = require_string(
+            find_field_any(info_object, {"chartName", "chart_name"}), "chartName");
         document.info_.level = require_int(find_field(info_object, "level"), 1, "level");
-        document.info_.init_bpm = require_number(find_field(info_object, "initBPM"), 120.0, "initBPM");
-        document.info_.judge_rank = require_number(find_field(info_object, "judgeRank"), 100.0, "judgeRank");
+        document.info_.init_bpm = require_number(
+            find_field_any(info_object, {"initBPM", "init_bpm"}), 120.0, "initBPM");
+        document.info_.judge_rank = require_number(
+            find_field_any(info_object, {"judgeRank", "judge_rank"}), 100.0, "judgeRank");
         document.info_.total = require_number(find_field(info_object, "total"), 100.0, "total");
         document.info_.resolution = require_int(find_field(info_object, "resolution"), k_default_resolution, "resolution");
         if (document.info_.resolution < 0) {
@@ -818,8 +1024,9 @@ BmsonDocument BmsonDocument::from_json(std::string_view text)
         }
         take_extras(
             info_object,
-            {"title", "subtitle", "artist", "subartists", "genre", "modeHint", "chartName", "level",
-             "initBPM", "judgeRank", "total", "resolution"},
+            {"title", "subtitle", "artist", "subartists", "genre", "modeHint", "mode_hint",
+             "chartName", "chart_name", "level", "initBPM", "init_bpm", "judgeRank", "judge_rank",
+             "total", "resolution"},
             document.extra_info_);
     }
 
@@ -841,82 +1048,36 @@ BmsonDocument BmsonDocument::from_json(std::string_view text)
         }
     }
 
-    if (const JsonValue* notes = find_field(root, "bpmNotes")) {
-        if (notes->kind != JsonValue::Kind::array) {
-            throw BmsonParseError("bpmNotes must be an array");
-        }
-        for (const auto& item : notes->array) {
-            if (item.kind != JsonValue::Kind::object) {
-                throw BmsonParseError("bpmNotes entries must be objects");
-            }
-            BmsonBpmNote note;
-            note.y = require_pulse(find_field(item, "y"), 0, "bpmNotes.y");
-            note.v = require_number(find_field(item, "v"), 0.0, "bpmNotes.v");
-            ExtraJson extra;
-            take_extras(item, {"y", "v"}, extra);
-            document.bpm_notes_.push_back(note);
-            document.extra_bpm_notes_.push_back(std::move(extra));
-        }
-    }
-
-    if (const JsonValue* notes = find_field(root, "stopNotes")) {
-        if (notes->kind != JsonValue::Kind::array) {
-            throw BmsonParseError("stopNotes must be an array");
-        }
-        for (const auto& item : notes->array) {
-            if (item.kind != JsonValue::Kind::object) {
-                throw BmsonParseError("stopNotes entries must be objects");
-            }
-            BmsonStopNote note;
-            note.y = require_pulse(find_field(item, "y"), 0, "stopNotes.y");
-            note.v = require_number(find_field(item, "v"), 0.0, "stopNotes.v");
-            ExtraJson extra;
-            take_extras(item, {"y", "v"}, extra);
-            document.stop_notes_.push_back(note);
-            document.extra_stop_notes_.push_back(std::move(extra));
-        }
-    }
-
-    if (const JsonValue* channels = find_field(root, "soundChannels")) {
-        if (channels->kind != JsonValue::Kind::array) {
-            throw BmsonParseError("soundChannels must be an array");
-        }
-        for (const auto& item : channels->array) {
-            if (item.kind != JsonValue::Kind::object) {
-                throw BmsonParseError("soundChannels entries must be objects");
-            }
-            BmsonSoundChannel channel;
-            channel.name = require_string(find_field(item, "name"), "soundChannels.name");
-            ExtraJson note_parent_extra;
-            std::vector<ExtraJson> note_extras;
-            if (const JsonValue* notes = find_field(item, "notes")) {
-                if (notes->kind != JsonValue::Kind::array) {
-                    throw BmsonParseError("soundChannels.notes must be an array");
-                }
-                for (const auto& note_value : notes->array) {
-                    if (note_value.kind != JsonValue::Kind::object) {
-                        throw BmsonParseError("soundChannels.notes entries must be objects");
-                    }
-                    BmsonNote note;
-                    note.x = require_pulse(find_field(note_value, "x"), 0, "notes.x");
-                    note.y = require_pulse(find_field(note_value, "y"), 0, "notes.y");
-                    note.l = require_pulse(find_field(note_value, "l"), 0, "notes.l");
-                    if (note.l < 0) {
-                        throw BmsonParseError("notes.l must not be negative");
-                    }
-                    note.c = require_bool(find_field(note_value, "c"), false, "notes.c");
-                    ExtraJson extra;
-                    take_extras(note_value, {"x", "y", "l", "c"}, extra);
-                    channel.notes.push_back(note);
-                    note_extras.push_back(std::move(extra));
-                }
-            }
-            take_extras(item, {"name", "notes"}, note_parent_extra);
-            document.sound_channels_.push_back(std::move(channel));
-            document.extra_channels_.push_back(std::move(note_parent_extra));
-            document.extra_notes_.push_back(std::move(note_extras));
-        }
-    }
+    ingest_bpm_notes(
+        find_field(root, "bpmNotes"), "bpmNotes", document.bpm_notes_, document.extra_bpm_notes_, false);
+    ingest_bpm_notes(
+        find_field(root, "bpm_events"),
+        "bpm_events",
+        document.bpm_notes_,
+        document.extra_bpm_notes_,
+        true);
+    ingest_stop_notes(
+        find_field(root, "stopNotes"), "stopNotes", document.stop_notes_, document.extra_stop_notes_, false);
+    ingest_stop_notes(
+        find_field(root, "stop_events"),
+        "stop_events",
+        document.stop_notes_,
+        document.extra_stop_notes_,
+        true);
+    ingest_sound_channels(
+        find_field(root, "soundChannels"),
+        "soundChannels",
+        document.sound_channels_,
+        document.extra_channels_,
+        document.extra_notes_,
+        false);
+    ingest_sound_channels(
+        find_field(root, "sound_channels"),
+        "sound_channels",
+        document.sound_channels_,
+        document.extra_channels_,
+        document.extra_notes_,
+        true);
 
     if (const JsonValue* bga = find_field(root, "bga")) {
         if (bga->kind != JsonValue::Kind::object) {
@@ -951,7 +1112,8 @@ BmsonDocument BmsonDocument::from_json(std::string_view text)
 
     take_extras(
         root,
-        {"version", "info", "lines", "bpmNotes", "stopNotes", "soundChannels", "bga"},
+        {"version", "info", "lines", "bpmNotes", "bpm_events", "stopNotes", "stop_events",
+         "soundChannels", "sound_channels", "bga"},
         document.extra_root_);
     return document;
 }
@@ -976,9 +1138,18 @@ std::string object_json(const std::vector<std::pair<std::string, std::string>>& 
 
 namespace {
 
+[[nodiscard]] bool pulse_reaches(std::int64_t probe, std::int64_t origin, std::int64_t length)
+{
+    std::int64_t end = 0;
+    if (__builtin_add_overflow(origin, length, &end)) {
+        return length >= 0;
+    }
+    return probe <= end;
+}
+
 bool pulses_overlap(std::int64_t left_y, std::int64_t left_l, std::int64_t right_y, std::int64_t right_l)
 {
-    return left_y <= right_y + right_l && right_y <= left_y + left_l;
+    return pulse_reaches(left_y, right_y, right_l) && pulse_reaches(right_y, left_y, left_l);
 }
 
 void require_note_length(const BmsonNote& note)
@@ -991,8 +1162,9 @@ void require_note_length(const BmsonNote& note)
 [[nodiscard]] bool is_first_class_info_key(std::string_view key)
 {
     static constexpr std::string_view known[] = {
-        "title", "subtitle", "artist", "subartists", "genre", "modeHint", "chartName",
-        "level", "initBPM", "judgeRank", "total", "resolution"};
+        "title", "subtitle", "artist", "subartists", "genre", "modeHint", "mode_hint",
+        "chartName", "chart_name", "level", "initBPM", "init_bpm", "judgeRank", "judge_rank",
+        "total", "resolution"};
     for (const auto item : known) {
         if (item == key) {
             return true;
@@ -1507,7 +1679,12 @@ int BmsonDocument::acceptable_resolution_divider() const
         for (const auto& note : channel.notes) {
             consider(note.y);
             if (note.l != 0) {
-                consider(note.y + note.l);
+                std::int64_t end = 0;
+                if (__builtin_add_overflow(note.y, note.l, &end)) {
+                    end = note.l < 0 ? std::numeric_limits<std::int64_t>::min()
+                                     : std::numeric_limits<std::int64_t>::max();
+                }
+                consider(end);
             }
         }
     }
@@ -1595,11 +1772,11 @@ std::string BmsonDocument::to_json() const
     write_pretty_array(subartists_json, subartists, 2);
     append_field(info_fields, "subartists", std::move(subartists_json));
     append_field(info_fields, "genre", quote_string(info_.genre));
-    append_field(info_fields, "modeHint", quote_string(info_.mode_hint));
-    append_field(info_fields, "chartName", quote_string(info_.chart_name));
+    append_field(info_fields, "mode_hint", quote_string(info_.mode_hint));
+    append_field(info_fields, "chart_name", quote_string(info_.chart_name));
     append_field(info_fields, "level", format_int(info_.level));
-    append_field(info_fields, "initBPM", format_number(info_.init_bpm));
-    append_field(info_fields, "judgeRank", format_number(info_.judge_rank));
+    append_field(info_fields, "init_bpm", format_number(info_.init_bpm));
+    append_field(info_fields, "judge_rank", format_number(info_.judge_rank));
     append_field(info_fields, "total", format_number(info_.total));
     append_field(info_fields, "resolution", format_int(info_.resolution));
     append_extras(info_fields, extra_info_);
@@ -1618,7 +1795,7 @@ std::string BmsonDocument::to_json() const
     auto bpm_json = [&](std::size_t index) {
         std::vector<std::pair<std::string, std::string>> fields;
         append_field(fields, "y", format_int(bpm_notes_[index].y));
-        append_field(fields, "v", format_number(bpm_notes_[index].v));
+        append_field(fields, "bpm", format_number(bpm_notes_[index].v));
         if (index < extra_bpm_notes_.size()) {
             append_extras(fields, extra_bpm_notes_[index]);
         }
@@ -1627,7 +1804,7 @@ std::string BmsonDocument::to_json() const
     auto stop_json = [&](std::size_t index) {
         std::vector<std::pair<std::string, std::string>> fields;
         append_field(fields, "y", format_int(stop_notes_[index].y));
-        append_field(fields, "v", format_number(stop_notes_[index].v));
+        append_field(fields, "duration", format_number(stop_notes_[index].v));
         if (index < extra_stop_notes_.size()) {
             append_extras(fields, extra_stop_notes_[index]);
         }
@@ -1712,9 +1889,9 @@ std::string BmsonDocument::to_json() const
     append_field(root, "version", quote_string(version_));
     append_field(root, "info", std::move(info_json));
     append_field(root, "lines", std::move(lines_json));
-    append_field(root, "bpmNotes", std::move(bpm_json_text));
-    append_field(root, "stopNotes", std::move(stop_json_text));
-    append_field(root, "soundChannels", std::move(channels_json));
+    append_field(root, "bpm_events", std::move(bpm_json_text));
+    append_field(root, "stop_events", std::move(stop_json_text));
+    append_field(root, "sound_channels", std::move(channels_json));
     const bool write_bga = !bga_headers_.empty() || !bga_events_.empty() || !layer_events_.empty()
         || !poor_events_.empty() || !extra_bga_.empty();
     if (write_bga) {

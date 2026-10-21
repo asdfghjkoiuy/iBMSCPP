@@ -8,9 +8,8 @@ final class BmsONEWindowController: NSWindowController, NSWindowDelegate {
     private let content: BmsONEMainWindowView
     /// BMSON document. Never a BMS `BmsDocument`.
     private var documentModel: BmsONEDocument
-    /// BmsONE 自己的菜单。只在本窗口是 key 时接到 `NSApp.mainMenu`。
+    /// BmsONE 命令菜单。绑在这个窗口上，不替换主程序的 `NSApp.mainMenu`。
     private(set) var bmsoneMenu: NSMenu
-    private var restoredAppMenu: NSMenu?
     private let importDialog = BmsONEImportWindowController()
     private let gridDialog = BmsONEGridSettingWindowController()
     private let exportWavDialog = BmsONEExportWavWindowController()
@@ -48,18 +47,6 @@ final class BmsONEWindowController: NSWindowController, NSWindowDelegate {
         window?.center()
         showWindow(self)
         window?.makeKeyAndOrderFront(self)
-    }
-
-    func windowDidBecomeKey(_ notification: Notification) {
-        guard NSApp.mainMenu !== bmsoneMenu else { return }
-        restoredAppMenu = NSApp.mainMenu
-        NSApp.mainMenu = bmsoneMenu
-    }
-
-    func windowDidResignKey(_ notification: Notification) {
-        guard NSApp.mainMenu === bmsoneMenu, let restoredAppMenu else { return }
-        NSApp.mainMenu = restoredAppMenu
-        self.restoredAppMenu = nil
     }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {

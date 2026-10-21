@@ -1,0 +1,36 @@
+{
+  "version": "1.0.0",
+  "info": {
+    "title": "BmsONE Snake",
+    "subtitle": "",
+    "artist": "Test",
+    "subartists": [],
+    "genre": "",
+    "mode_hint": "beat-7k",
+    "chart_name": "Hyper",
+    "level": 2,
+    "init_bpm": 140,
+    "judge_rank": 80,
+    "total": 100,
+    "resolution": 240
+  },
+  "lines": [
+    { "y": 0 },
+    { "y": 240 }
+  ],
+  "bpm_events": [
+    { "y": 240, "bpm": 160 }
+  ],
+  "stop_events": [
+    { "y": 480, "duration": 120 }
+  ],
+  "sound_channels": [
+    {
+      "name": "kick.wav",
+      "notes": [
+        { "x": 1, "y": 0, "l": 0, "c": false },
+        { "x": 2, "y": 240, "l": 240, "c": false }
+      ]
+    }
+  ]
+}

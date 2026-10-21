@@ -35,11 +35,21 @@ struct BmhelperPcmWav: Equatable {
 }
 
 enum BmhelperWavIO {
-    static func write(_ wav: BmhelperPcmWav) -> Data {
+    /// RIFF 的 `36 + dataSize` 必须放进 `UInt32`。超出就失败，避免转换时整数溢出崩溃。
+    static func write(_ wav: BmhelperPcmWav) throws -> Data {
         let channels = max(wav.channels, 1)
         let sampleRate = max(wav.sampleRate, 1)
+        let maxDataBytes = Int(UInt32.max) - 36
+        guard channels <= Int(UInt16.max) / 2, wav.samples.count <= maxDataBytes / 2 else {
+            throw BmhelperWavSplitError.couldNotOpenOutput("WAV exceeds 4GB")
+        }
+        let blockAlign = channels * 2
+        guard blockAlign > 0, sampleRate <= Int(UInt32.max) / blockAlign else {
+            throw BmhelperWavSplitError.couldNotOpenOutput("WAV exceeds 4GB")
+        }
         let dataSize = wav.samples.count * 2
         var data = Data()
+        data.reserveCapacity(44 + dataSize)
         data.append(contentsOf: Array("RIFF".utf8))
         appendUInt32(&data, UInt32(36 + dataSize))
         data.append(contentsOf: Array("WAVE".utf8))
@@ -48,15 +58,12 @@ enum BmhelperWavIO {
         appendUInt16(&data, 1)
         appendUInt16(&data, UInt16(channels))
         appendUInt32(&data, UInt32(sampleRate))
-        appendUInt32(&data, UInt32(sampleRate * channels * 2))
-        appendUInt16(&data, UInt16(channels * 2))
+        appendUInt32(&data, UInt32(sampleRate * blockAlign))
+        appendUInt16(&data, UInt16(blockAlign))
         appendUInt16(&data, 16)
         data.append(contentsOf: Array("data".utf8))
         appendUInt32(&data, UInt32(dataSize))
-        for sample in wav.samples {
-            var value = sample.littleEndian
-            withUnsafeBytes(of: &value) { data.append(contentsOf: $0) }
-        }
+        wav.samples.withUnsafeBytes { data.append(contentsOf: $0) }
         return data
     }
 
@@ -74,15 +81,20 @@ enum BmhelperWavIO {
         var pcm = false
         var samples: [Int16] = []
         var foundData = false
-        while offset + 8 <= data.count {
+        while true {
+            let (headerEnd, headerOverflow) = offset.addingReportingOverflow(8)
+            if headerOverflow || headerEnd > data.count { break }
             let id = ascii(data, offset, 4)
             let size = Int(readUInt32(data, offset + 4))
-            let body = offset + 8
-            if id == "fmt ", size >= 16, body + 16 <= data.count {
-                pcm = readUInt16(data, body) == 1
-                channels = Int(readUInt16(data, body + 2))
-                sampleRate = Int(readUInt32(data, body + 4))
-                bits = Int(readUInt16(data, body + 14))
+            let body = headerEnd
+            if id == "fmt ", size >= 16 {
+                let (fmtEnd, fmtOverflow) = body.addingReportingOverflow(16)
+                if !fmtOverflow, fmtEnd <= data.count {
+                    pcm = readUInt16(data, body) == 1
+                    channels = Int(readUInt16(data, body + 2))
+                    sampleRate = Int(readUInt32(data, body + 4))
+                    bits = Int(readUInt16(data, body + 14))
+                }
             } else if id == "data" {
                 guard pcm, bits == 16, channels > 0, sampleRate > 0 else {
                     throw BmhelperWavSplitError.couldNotReadInput("")
@@ -99,12 +111,24 @@ enum BmhelperWavIO {
                 foundData = true
                 break
             }
-            offset = body + size + (size % 2)
+            guard let next = advancedChunkOffset(from: offset, body: body, size: size) else {
+                throw BmhelperWavSplitError.couldNotReadInput("")
+            }
+            offset = next
         }
         guard foundData else {
             throw BmhelperWavSplitError.couldNotReadInput("")
         }
         return BmhelperPcmWav(sampleRate: sampleRate, channels: channels, samples: samples)
+    }
+
+    /// chunk 长度来自文件。加法溢出或步进不前进都当损坏头，避免越界或死循环。
+    private static func advancedChunkOffset(from offset: Int, body: Int, size: Int) -> Int? {
+        let (chunkEnd, chunkOverflow) = body.addingReportingOverflow(size)
+        if chunkOverflow { return nil }
+        let (next, padOverflow) = chunkEnd.addingReportingOverflow(size % 2)
+        if padOverflow || next <= offset { return nil }
+        return next
     }
 
     private static func ascii(_ data: Data, _ start: Int, _ count: Int) -> String {
@@ -159,12 +183,14 @@ enum BmhelperWavSplit {
         String(format: "%@_%03d.wav", prefix, indexFromZero + 1)
     }
 
-    static func slice(wav: BmhelperPcmWav, times: [Double]) -> [BmhelperPcmWav] {
+    /// 每个切点对应 `[start, end)` 采样下标，含全部声道。最后一段接到文件末尾。
+    static func sliceRanges(wav: BmhelperPcmWav, times: [Double]) -> [(start: Int, end: Int)] {
         let channels = max(wav.channels, 1)
         let sampleRate = max(wav.sampleRate, 1)
         let totalFrames = wav.samples.count / channels
         let duration = Double(totalFrames) / Double(sampleRate)
-        var parts: [BmhelperPcmWav] = []
+        var ranges: [(start: Int, end: Int)] = []
+        ranges.reserveCapacity(times.count)
         for (index, startTime) in times.enumerated() {
             let endTime = index + 1 < times.count ? times[index + 1] : duration
             let startFrame = max(Int(startTime * Double(sampleRate)), 0)
@@ -173,10 +199,21 @@ enum BmhelperWavSplit {
             let clampedCount = min(frameCount, max(totalFrames - clampedStart, 0))
             let startSample = clampedStart * channels
             let endSample = startSample + clampedCount * channels
-            let slice = Array(wav.samples[startSample..<endSample])
-            parts.append(BmhelperPcmWav(sampleRate: sampleRate, channels: channels, samples: slice))
+            ranges.append((start: startSample, end: endSample))
         }
-        return parts
+        return ranges
+    }
+
+    static func slice(wav: BmhelperPcmWav, times: [Double]) -> [BmhelperPcmWav] {
+        let channels = max(wav.channels, 1)
+        let sampleRate = max(wav.sampleRate, 1)
+        return sliceRanges(wav: wav, times: times).map { range in
+            BmhelperPcmWav(
+                sampleRate: sampleRate,
+                channels: channels,
+                samples: Array(wav.samples[range.start..<range.end])
+            )
+        }
     }
 
     static func splitFile(

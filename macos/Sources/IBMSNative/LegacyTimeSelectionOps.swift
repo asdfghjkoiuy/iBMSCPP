@@ -409,18 +409,30 @@ enum LegacyTimeSelectionOps {
         target: Int,
         result: Double
     ) -> Double {
+        guard target > 0, result.isFinite, vPosition.isFinite, !values.isEmpty else { return vPosition }
         var time = 0.0
         var index = 0
         while index < values.count {
+            guard index + 1 < positions.count, values[index] > 0 else { return vPosition }
             if vPosition < positions[index + 1] { break }
-            time += (positions[index + 1] - positions[index]) / Double(values[index])
+            let span = (positions[index + 1] - positions[index]) / Double(values[index])
+            guard span.isFinite else { return vPosition }
+            time += span
             index += 1
         }
-        time += (vPosition - positions[index]) / Double(values[index])
-        if time - (half - lower) / Double(target) > 0 {
-            return (time - (half - lower) / Double(target)) * result + half
+        guard index < values.count, index < positions.count, values[index] > 0 else { return vPosition }
+        let tail = (vPosition - positions[index]) / Double(values[index])
+        guard tail.isFinite else { return vPosition }
+        time += tail
+        guard time.isFinite else { return vPosition }
+        let boundary = (half - lower) / Double(target)
+        guard boundary.isFinite else { return vPosition }
+        if time - boundary > 0 {
+            let mapped = (time - boundary) * result + half
+            return mapped.isFinite ? mapped : vPosition
         }
-        return time * Double(target) + lower
+        let mapped = time * Double(target) + lower
+        return mapped.isFinite ? mapped : vPosition
     }
 
     private static func scaledBPM(_ value: Int, ratio: Double, cap: Bool) -> Int {
@@ -429,7 +441,8 @@ enum LegacyTimeSelectionOps {
     }
 
     private static func integerValue(_ value: Double) -> Int {
-        Int(value.rounded())
+        guard value.isFinite else { return 0 }
+        return Int(exactly: value.rounded()) ?? 0
     }
 
     private static func sortedPreservingHeader(_ notes: [TimeSelectionNote]) -> [TimeSelectionNote] {

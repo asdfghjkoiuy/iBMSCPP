@@ -1151,6 +1151,16 @@ enum ChartInput {
     static func pointForAnchor(from pointer: CGPoint, anchorOffsetY: CGFloat) -> CGPoint {
         CGPoint(x: pointer.x, y: pointer.y + anchorOffsetY)
     }
+
+    /// 空白拖框的内容坐标矩形。BMS 按这个矩形收音符；BMSON 仍走脉冲和列种类。
+    static func marqueeRect(from start: CGPoint, to end: CGPoint) -> CGRect {
+        CGRect(
+            x: min(start.x, end.x),
+            y: min(start.y, end.y),
+            width: max(1, abs(end.x - start.x)),
+            height: max(1, abs(end.y - start.y))
+        )
+    }
 }
 
 enum ChartSelection {
@@ -1919,6 +1929,23 @@ struct ChartLayout {
                 result.append(ChartGridLine(y: lineY, kind: kind))
             }
         }
+    }
+
+    /// 只含当前视口里会画到的小节。`viewHeight` 是窗高，标签会画在小节线上方，所以多留一小节。
+    func visibleMeasures(in viewport: CGRect, viewHeight: CGFloat, labelPadding: CGFloat) -> [ChartMeasureSnapshot] {
+        guard !measuresByStart.isEmpty else { return [] }
+        let padding = Double(max(labelPadding, 0) / max(pixelsPerQuarterBeat, 1))
+        let extent = viewport.height > 0
+            ? viewport
+            : CGRect(origin: viewport.origin, size: CGSize(width: max(viewport.width, 1), height: viewHeight))
+        let span = visibleBeatRange(in: extent)
+        let low = min(span.lowerBound, span.upperBound) - padding
+        let high = max(span.lowerBound, span.upperBound) + padding
+        let lower = lowerBound(measuresByStart, beat: low, value: \.start)
+        let first = lower > 0 ? lower - 1 : 0
+        let last = min(measuresByStart.count, upperBound(measuresByStart, beat: high, value: \.start))
+        guard first < last else { return [] }
+        return Array(measuresByStart[first..<last])
     }
 
     private func visibleBeatRange(in viewport: CGRect) -> ClosedRange<Double> {

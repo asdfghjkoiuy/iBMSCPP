@@ -20,9 +20,35 @@ enum AudioSliceRequest {
 
 enum AudioSlice {
     /// 把 OGG 等解成 PCM16 WAV。应用启动时接 `IBMSAudioBridge`；切片测试也可以设。
-    nonisolated(unsafe) static var decodeToWav: ((URL) -> Data?)?
+    /// 解码本身不绑主线程，闭包按 `@Sendable` 交给切片和预听共用。
+    nonisolated(unsafe) static var decodeToWav: (@Sendable (URL) -> Data?)?
+    private static let pcmDecodeCache = PcmDecodeCache()
 
     static func readPcm(_ url: URL) throws -> BmhelperPcmWav {
+        if let stamp = fileStamp(url),
+           let cached = pcmDecodeCache.load(path: url.path, modified: stamp.modified, size: stamp.size) {
+            return cached
+        }
+        let wav = try loadPcm(url)
+        if let stamp = fileStamp(url) {
+            pcmDecodeCache.store(path: url.path, modified: stamp.modified, size: stamp.size, wav: wav)
+        }
+        return wav
+    }
+
+    /// 最近一次成功解码。路径、修改时间和大小都没变就不再读盘。
+    private static func fileStamp(_ url: URL) -> (modified: Date, size: Int)? {
+        let keys: Set<URLResourceKey> = [.contentModificationDateKey, .fileSizeKey]
+        guard let values = try? url.resourceValues(forKeys: keys),
+              let modified = values.contentModificationDate,
+              let size = values.fileSize
+        else {
+            return nil
+        }
+        return (modified, size)
+    }
+
+    private static func loadPcm(_ url: URL) throws -> BmhelperPcmWav {
         if let data = try? Data(contentsOf: url), let wav = try? BmhelperWavIO.read(data) {
             return wav
         }
@@ -62,6 +88,23 @@ enum AudioSlice {
         prefix: String,
         request: AudioSliceRequest
     ) throws -> [URL] {
+        try splitFile(
+            mode: mode,
+            wav: try readPcm(input),
+            outputDirectory: outputDirectory,
+            prefix: prefix,
+            request: request
+        )
+    }
+
+    /// 切已经解码的 PCM。界面加载过波形后再导出时走这里，不再读同一份文件。
+    static func splitFile(
+        mode: AudioSliceMode,
+        wav source: BmhelperPcmWav,
+        outputDirectory: URL,
+        prefix: String,
+        request: AudioSliceRequest
+    ) throws -> [URL] {
         let fileManager = FileManager.default
         var isDirectory: ObjCBool = false
         guard fileManager.fileExists(atPath: outputDirectory.path, isDirectory: &isDirectory) else {
@@ -73,7 +116,7 @@ enum AudioSlice {
         guard fileManager.isWritableFile(atPath: outputDirectory.path) else {
             throw BmhelperWavSplitError.outputPathNotWritable
         }
-        var wav = try readPcm(input)
+        var wav = source
         if mode == .woslicer {
             wav = WoslicerTrim.trim(wav)
         }
@@ -114,5 +157,30 @@ enum AudioSlice {
             channels: channels,
             samples: Array(wav.samples[startSample..<endSample])
         )
+    }
+}
+
+/// 只留一条。路径、修改时间或大小变了就作废。
+private final class PcmDecodeCache: @unchecked Sendable {
+    private let lock = NSLock()
+    private var path: String?
+    private var modified: Date?
+    private var size: Int?
+    private var wav: BmhelperPcmWav?
+
+    func load(path: String, modified: Date, size: Int) -> BmhelperPcmWav? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard self.path == path, self.modified == modified, self.size == size else { return nil }
+        return wav
+    }
+
+    func store(path: String, modified: Date, size: Int, wav: BmhelperPcmWav) {
+        lock.lock()
+        defer { lock.unlock() }
+        self.path = path
+        self.modified = modified
+        self.size = size
+        self.wav = wav
     }
 }

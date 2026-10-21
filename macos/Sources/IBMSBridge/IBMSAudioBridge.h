@@ -9,7 +9,7 @@ FOUNDATION_EXPORT NSErrorDomain const IBMSAudioBridgeErrorDomain;
 
 + (nullable NSData *)pcmWavFromAudioFile:(NSString *)path
                                    error:(NSError * _Nullable * _Nullable)error
-    NS_SWIFT_NAME(pcmWav(fromFile:));
+    NS_SWIFT_NAME(pcmWav(fromFile:)) NS_SWIFT_NONISOLATED;
 
 @end
 

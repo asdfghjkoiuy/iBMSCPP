@@ -55,3 +55,7 @@ compile_commands.json
 
 # 嵌套的原版 iBMSC / µBMSC，不进本仓库
 iBMSC/
+
+# 官方 BmsONE 克隆（自带 git，分支 special-bmsone-qt6）
+BmsONE/src/i18n/ja.qm
+BmsONE/out/

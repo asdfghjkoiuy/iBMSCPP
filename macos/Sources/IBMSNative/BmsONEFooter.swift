@@ -17,7 +17,7 @@ enum BmsONEFooter {
     static let textColor: UInt32 = 0x000000
     static let prefixMark = "..."
 
-    enum TextMode: Equatable {
+    enum TextMode: Equatable, Hashable {
         case horizontal
         case verticalWrap
         case verticalSingle

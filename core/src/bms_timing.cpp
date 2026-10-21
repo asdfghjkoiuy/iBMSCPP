@@ -6,6 +6,7 @@
 #include <cmath>
 #include <limits>
 #include <stdexcept>
+#include <utility>
 
 namespace ibms
 {
@@ -124,10 +125,11 @@ std::optional<BeatPosition> decimal(std::string_view value, bool allow_zero = fa
         }
         if (byte < '0' || byte > '9')
             return std::nullopt;
+        const int digit = byte - '0';
         digit_seen = true;
-        if (numerator > (std::numeric_limits<std::int64_t>::max() - (byte - '0')) / 10)
+        if (numerator > (std::numeric_limits<std::int64_t>::max() - digit) / 10)
             return std::nullopt;
-        numerator = numerator * 10 + (byte - '0');
+        numerator = numerator * 10 + digit;
         if (fractional) {
             if (denominator > std::numeric_limits<std::int64_t>::max() / 10)
                 return std::nullopt;
@@ -164,8 +166,8 @@ void unavailable(BmsTiming& timing, std::size_t line, std::string message)
 
 } // namespace
 
-bool IndexedTimingRadix::bpm_x1296_ = false;
-bool IndexedTimingRadix::stop_x1296_ = false;
+thread_local bool IndexedTimingRadix::bpm_x1296_ = false;
+thread_local bool IndexedTimingRadix::stop_x1296_ = false;
 
 void IndexedTimingRadix::set(bool bpm_x1296, bool stop_x1296) noexcept
 {
@@ -350,7 +352,7 @@ BmsTiming build_bms_timing(std::string_view bytes, bool has_conditionals)
         return timing;
     std::stable_sort(raw_events.begin(), raw_events.end(),
                      [](const BmsTimingEvent& left, const BmsTimingEvent& right) { return left.beat < right.beat; });
-    timing.events = raw_events;
+    timing.events = std::move(raw_events);
     BeatPosition current_beat{};
     BeatPosition current_bpm = initial_bpm;
     double seconds = 0.0;

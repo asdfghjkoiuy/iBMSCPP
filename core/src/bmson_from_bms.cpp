@@ -5,14 +5,19 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <charconv>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <limits>
+#include <locale>
 #include <map>
 #include <optional>
 #include <set>
+#include <sstream>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -71,11 +76,27 @@ std::string ascii_upper(std::string_view text)
     return out;
 }
 
+std::int64_t quantize_pulses(double value)
+{
+    if (!std::isfinite(value)) {
+        return 0;
+    }
+    const double highest = static_cast<double>(std::numeric_limits<std::int64_t>::max());
+    const double lowest = static_cast<double>(std::numeric_limits<std::int64_t>::min());
+    if (value >= highest) {
+        return std::numeric_limits<std::int64_t>::max();
+    }
+    if (value < lowest) {
+        return std::numeric_limits<std::int64_t>::min();
+    }
+    return std::llround(value);
+}
+
 std::int64_t pulse_from_beat(const BeatPosition& beat, int resolution)
 {
     const double value = (static_cast<double>(beat.numerator()) / static_cast<double>(beat.denominator()))
         * static_cast<double>(resolution);
-    return static_cast<std::int64_t>(std::llround(value));
+    return quantize_pulses(value);
 }
 
 std::int64_t lane_for_offset(int offset, BmsonBmsMode mode)
@@ -358,10 +379,21 @@ int parse_int(std::string_view text, int fallback)
     if (text.empty()) {
         return fallback;
     }
-    const std::string owned(text);
-    char* end = nullptr;
-    const long value = std::strtol(owned.c_str(), &end, 10);
-    if (end == owned.c_str()) {
+    const char* begin = text.data();
+    const char* end = begin + text.size();
+    while (begin < end && (*begin == ' ' || *begin == '\t' || *begin == '\r' || *begin == '\n')) {
+        ++begin;
+    }
+    if (begin < end && *begin == '+') {
+        ++begin;
+    }
+    long value = 0;
+    const auto parsed = std::from_chars(begin, end, value);
+    if (parsed.ec == std::errc::result_out_of_range) {
+        const bool negative = begin < end && *begin == '-';
+        return static_cast<int>(negative ? std::numeric_limits<long>::min() : std::numeric_limits<long>::max());
+    }
+    if (parsed.ec != std::errc{} || parsed.ptr == begin) {
         return fallback;
     }
     return static_cast<int>(value);
@@ -372,10 +404,11 @@ double parse_real(std::string_view text, double fallback)
     if (text.empty()) {
         return fallback;
     }
-    const std::string owned(text);
-    char* end = nullptr;
-    const double value = std::strtod(owned.c_str(), &end);
-    if (end == owned.c_str()) {
+    std::istringstream stream{std::string(text)};
+    stream.imbue(std::locale::classic());
+    double value = 0;
+    stream >> value;
+    if (!stream || !std::isfinite(value)) {
         return fallback;
     }
     return value;
@@ -735,8 +768,8 @@ BmsonDocument bmson_from_bms(const BmsDocument& bms, const BmsonFromBmsOptions& 
             const int index = zz_to_int(event.token);
             if (index >= 0 && index < k_wav_slots && defs.has_stop[static_cast<std::size_t>(index)]
                 && defs.stop[static_cast<std::size_t>(index)] > 0.0) {
-                const double pulses = std::llround(
-                    static_cast<double>(resolution) * defs.stop[static_cast<std::size_t>(index)] / 48.0);
+                const double pulses = static_cast<double>(quantize_pulses(
+                    static_cast<double>(resolution) * defs.stop[static_cast<std::size_t>(index)] / 48.0));
                 stop_notes.push_back(BmsonStopNote{y, pulses});
             }
         }

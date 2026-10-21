@@ -352,21 +352,20 @@ enum LegacyStatus {
     ) -> Double {
         var bpm_contrib = 0.0
         var stop_contrib = 0.0
-        let bpm = bpmNotes
+        let bpm = bpmNotes.sorted { $0.vPosition < $1.vPosition }
         guard !bpm.isEmpty else { return 0 }
         for index in bpm.indices {
             let current = bpm[index]
             let notevpos = max(0, current.vPosition)
-            let duration: Double
-            if index + 1 != bpm.count {
-                duration = bpm[index + 1].vPosition - notevpos
-            } else {
-                duration = vpos - notevpos
-            }
-            let current_bps = 60 / (current.value / 10_000)
+            if notevpos >= vpos { break }
+            let segmentEnd = index + 1 < bpm.count ? min(vpos, bpm[index + 1].vPosition) : vpos
+            let duration = max(0, segmentEnd - notevpos)
+            let scaled = current.value / 10_000
+            guard scaled > 0 else { continue }
+            let current_bps = 60 / scaled
             bpm_contrib += current_bps * duration / 48
             let stop_beats = stopNotes
-                .filter { $0.vPosition >= notevpos && $0.vPosition < notevpos + duration }
+                .filter { $0.vPosition >= notevpos && $0.vPosition < segmentEnd }
                 .reduce(0.0) { $0 + $1.value / 10_000 } / 48
             stop_contrib += current_bps * stop_beats
         }

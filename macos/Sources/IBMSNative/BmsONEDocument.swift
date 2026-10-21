@@ -12,6 +12,20 @@ final class BmsONEDocument: BmsONEDocumentModel {
     private var redoJSON: [String] = []
     private var cleanJSON: String
     private var hasSavedClean: Bool
+    /// Bumps after each successful write and after the bridge object is replaced.
+    private var revision: UInt64 = 0
+    /// While an edit is open, snapshot reads go straight to the bridge.
+    private var editDepth = 0
+    private var cachedRevision: UInt64 = .max
+    private var cachedInfo: IBMSBmsonInfoSnapshot?
+    private var cachedLines: [IBMSBmsonBarLineSnapshot]?
+    private var cachedBpmNotes: [IBMSBmsonBpmNoteSnapshot]?
+    private var cachedStopNotes: [IBMSBmsonStopNoteSnapshot]?
+    private var cachedSoundChannels: [IBMSBmsonSoundChannelSnapshot]?
+    private var cachedBgaHeaders: [IBMSBmsonBgaHeaderSnapshot]?
+    private var cachedBgaEvents: [IBMSBmsonBgaEventSnapshot]?
+    private var cachedLayerEvents: [IBMSBmsonBgaEventSnapshot]?
+    private var cachedPoorEvents: [IBMSBmsonBgaEventSnapshot]?
 
     private init(bridge: IBMSBmsonBridge, filePath: String?, isModified: Bool) {
         self.bridge = bridge
@@ -196,23 +210,23 @@ final class BmsONEDocument: BmsONEDocumentModel {
         return (detected, BmsONEImportQuestion.choices(errorByMode: errorByMode))
     }
 
-    var title: String { bridge.info.title }
-    var initialBpm: Double { bridge.info.initBPM }
-    var modeHint: String { bridge.info.modeHint }
-    var resolution: Int { Int(bridge.info.resolution) }
-    var judgeRank: Double { bridge.info.judgeRank }
-    var total: Double { bridge.info.total }
-    var level: Int { Int(bridge.info.level) }
+    var title: String { info.title }
+    var initialBpm: Double { info.initBPM }
+    var modeHint: String { info.modeHint }
+    var resolution: Int { Int(info.resolution) }
+    var judgeRank: Double { info.judgeRank }
+    var total: Double { info.total }
+    var level: Int { Int(info.level) }
     var version: String { bridge.version }
-    var info: IBMSBmsonInfoSnapshot { bridge.info }
-    var lines: [IBMSBmsonBarLineSnapshot] { bridge.lines }
-    var bpmNotes: [IBMSBmsonBpmNoteSnapshot] { bridge.bpmNotes }
-    var stopNotes: [IBMSBmsonStopNoteSnapshot] { bridge.stopNotes }
-    var soundChannels: [IBMSBmsonSoundChannelSnapshot] { bridge.soundChannels }
-    var bgaHeaders: [IBMSBmsonBgaHeaderSnapshot] { bridge.bgaHeaders }
-    var bgaEvents: [IBMSBmsonBgaEventSnapshot] { bridge.bgaEvents }
-    var layerEvents: [IBMSBmsonBgaEventSnapshot] { bridge.layerEvents }
-    var poorEvents: [IBMSBmsonBgaEventSnapshot] { bridge.poorEvents }
+    var info: IBMSBmsonInfoSnapshot { cached(&cachedInfo) { bridge.info } }
+    var lines: [IBMSBmsonBarLineSnapshot] { cached(&cachedLines) { bridge.lines } }
+    var bpmNotes: [IBMSBmsonBpmNoteSnapshot] { cached(&cachedBpmNotes) { bridge.bpmNotes } }
+    var stopNotes: [IBMSBmsonStopNoteSnapshot] { cached(&cachedStopNotes) { bridge.stopNotes } }
+    var soundChannels: [IBMSBmsonSoundChannelSnapshot] { cached(&cachedSoundChannels) { bridge.soundChannels } }
+    var bgaHeaders: [IBMSBmsonBgaHeaderSnapshot] { cached(&cachedBgaHeaders) { bridge.bgaHeaders } }
+    var bgaEvents: [IBMSBmsonBgaEventSnapshot] { cached(&cachedBgaEvents) { bridge.bgaEvents } }
+    var layerEvents: [IBMSBmsonBgaEventSnapshot] { cached(&cachedLayerEvents) { bridge.layerEvents } }
+    var poorEvents: [IBMSBmsonBgaEventSnapshot] { cached(&cachedPoorEvents) { bridge.poorEvents } }
 
     func insertShortNote(laneX: Int64, pulseY: Int64, continueFlag: Bool = false) throws {
         try insertNote(laneX: laneX, pulseY: pulseY, length: 0, continueFlag: continueFlag)
@@ -835,15 +849,16 @@ final class BmsONEDocument: BmsONEDocumentModel {
         return targets
     }
 
-    private func soundNote(channel: Int, noteIndex: Int) throws -> IBMSBmsonNoteSnapshot {
-        guard channel >= 0,
-              channel < soundChannels.count,
+    private func soundNote(channel channelIndex: Int, noteIndex: Int) throws -> IBMSBmsonNoteSnapshot {
+        let channels = soundChannels
+        guard channelIndex >= 0,
+              channelIndex < channels.count,
               noteIndex >= 0,
-              noteIndex < soundChannels[channel].notes.count
+              noteIndex < channels[channelIndex].notes.count
         else {
             throw BmsONEDocumentError.parse("no sound note at the requested pulse")
         }
-        return soundChannels[channel].notes[noteIndex]
+        return channels[channelIndex].notes[noteIndex]
     }
 
     private func bgaEvents(on lane: BmsonChartMapping.BgaLane) -> [IBMSBmsonBgaEventSnapshot] {
@@ -970,7 +985,7 @@ final class BmsONEDocument: BmsONEDocumentModel {
             }
         } catch {
             if let restored = try? IBMSBmsonBridge(jsonString: snapshot) {
-                bridge = restored
+                installBridge(restored)
             }
             throw error
         }
@@ -2004,7 +2019,7 @@ final class BmsONEDocument: BmsONEDocumentModel {
             return false
         }
         redoJSON.append(current)
-        bridge = restored
+        installBridge(restored)
         refreshModified()
         return true
     }
@@ -2018,7 +2033,7 @@ final class BmsONEDocument: BmsONEDocumentModel {
             return false
         }
         undoJSON.append(current)
-        bridge = restored
+        installBridge(restored)
         refreshModified()
         return true
     }
@@ -2039,8 +2054,45 @@ final class BmsONEDocument: BmsONEDocumentModel {
         try save(to: URL(fileURLWithPath: filePath))
     }
 
+    private func noteRevisionChanged() {
+        revision &+= 1
+        clearSnapshotCache()
+    }
+
+    private func clearSnapshotCache() {
+        cachedRevision = .max
+        cachedInfo = nil
+        cachedLines = nil
+        cachedBpmNotes = nil
+        cachedStopNotes = nil
+        cachedSoundChannels = nil
+        cachedBgaHeaders = nil
+        cachedBgaEvents = nil
+        cachedLayerEvents = nil
+        cachedPoorEvents = nil
+    }
+
+    private func installBridge(_ next: IBMSBmsonBridge) {
+        bridge = next
+        noteRevisionChanged()
+    }
+
+    private func cached<T>(_ slot: inout T?, _ load: () -> T) -> T {
+        if editDepth == 0, cachedRevision == revision, let slot {
+            return slot
+        }
+        let value = load()
+        if editDepth == 0 {
+            cachedRevision = revision
+            slot = value
+        }
+        return value
+    }
+
     private func commitEdit(_ body: () throws -> Void) throws {
         let before = try jsonString()
+        editDepth += 1
+        defer { editDepth -= 1 }
         do {
             try body()
         } catch {
@@ -2049,10 +2101,13 @@ final class BmsONEDocument: BmsONEDocumentModel {
             do {
                 bridge = try IBMSBmsonBridge(jsonString: before)
             } catch {
+                noteRevisionChanged()
                 throw BmsONEDocumentError.parse("Edit failed and rollback failed: \(error.localizedDescription)")
             }
+            noteRevisionChanged()
             throw BmsONEDocumentError.parse(error.localizedDescription)
         }
+        noteRevisionChanged()
         undoJSON.append(before)
         redoJSON.removeAll()
         isModified = true
@@ -2154,7 +2209,7 @@ final class BmsONEDocument: BmsONEDocumentModel {
             }
         } catch {
             if let restored = try? IBMSBmsonBridge(jsonString: snapshot) {
-                bridge = restored
+                installBridge(restored)
             }
             throw error
         }
@@ -2309,15 +2364,16 @@ final class BmsONEDocument: BmsONEDocumentModel {
     }
 
     private func note(at identity: Int) throws -> (channelIndex: Int, note: IBMSBmsonNoteSnapshot) {
+        let channels = soundChannels
         guard let address = BmsonChartMapping.noteAddress(identity: identity),
               address.channelIndex >= 0,
-              address.channelIndex < soundChannels.count,
+              address.channelIndex < channels.count,
               address.noteIndex >= 0,
-              address.noteIndex < soundChannels[address.channelIndex].notes.count
+              address.noteIndex < channels[address.channelIndex].notes.count
         else {
             throw BmsONEDocumentError.parse("no sound note at the requested pulse")
         }
-        return (address.channelIndex, soundChannels[address.channelIndex].notes[address.noteIndex])
+        return (address.channelIndex, channels[address.channelIndex].notes[address.noteIndex])
     }
 }
 

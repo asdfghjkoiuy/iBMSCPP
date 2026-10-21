@@ -381,6 +381,33 @@ void timing_edit_preservation_and_history(const std::filesystem::path& directory
            "failed measure-ratio overflow is atomic and leaves history unchanged");
 }
 
+void huge_int64_measure_ratio_timing_is_unavailable() {
+    auto document = BmsDocument::from_bytes("#TITLE Huge ratio\n#BPM 120\n#00002:9223372036854775807\n");
+    bool threw = false;
+    try {
+        const auto& timing = document.timing();
+        expect(!timing.available, "9223372036854775807 measure ratio makes timing unavailable");
+        expect(timing.events.empty() && timing.points.empty(),
+               "INT64_MAX measure ratio does not expose a partial timing snapshot");
+        bool mentions_range = false;
+        for (const auto& diagnostic : timing.diagnostics) {
+            mentions_range = mentions_range
+                || diagnostic.message.find("measure ratio exceeds the representable beat range") != std::string::npos;
+        }
+        expect(mentions_range,
+               "9223372036854775807 is accepted as an int64 decimal, then rejected when beats overflow");
+        expect(!timing.seconds_at(beat(0), false).has_value(),
+               "unavailable huge-ratio timing has no seconds oracle");
+    } catch (const std::exception& exception) {
+        threw = true;
+        expect(false, std::string{"INT64_MAX measure ratio timing() does not throw: "} + exception.what());
+    } catch (...) {
+        threw = true;
+        expect(false, "INT64_MAX measure ratio timing() does not throw an unknown exception");
+    }
+    expect(!threw, "INT64_MAX measure ratio completes without throwing");
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -408,6 +435,7 @@ int main(int argc, char** argv) {
         malformed_timing_rows_are_individually_unavailable();
         runtime_resource_stress();
         timing_edit_preservation_and_history(directory);
+        huge_int64_measure_ratio_timing_is_unavailable();
     } catch (const std::exception& exception) {
         std::cerr << "FATAL: " << exception.what() << '\n';
         return 1;

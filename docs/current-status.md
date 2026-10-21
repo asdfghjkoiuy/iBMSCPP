@@ -1,5 +1,23 @@
 # 当前进度和下一步
 
+2026-10-21 默认播放器与本轮交互修复状态：Release 应用已重新构建，路径为 `out/build/release/macos/IBMSNative.app`。默认 F5/F6/F7 仍走内置 uBMplay 风格预览；图集、Metal 谱面、1P/2P、BGA、统一音频和 WMV 原生视频路径均已接入。编辑器拖动实时预览、BMS 空白框选、多选移轨、失败拖动残影清理和长条 hold 发光已实现。预览 PLAY 时间跟随统一时钟；HiSpeed 为 0.50…5.00 共 19 档，RealHS 为 0.25…4.00 共 16 档，按住不连跳，当前值显示在控制条、菜单和 PLAY 信息。快捷键见 [预览控制说明](preview-controls.md)。
+
+验证：默认 Release 的 Session、Playfield、BGA、Video 和速度行为测试通过；WMV1/WMV2 ASF 实际帧、跳转、暂停、片尾保持、音频解码禁用和连续跟踪测试通过。窗口测试仍有时序不稳定：一次失败为 4x 到线时 beat 16/wall 0，复跑失败为 STOP timeline frozen；隔离窗口构建曾通过。这些失败尚未被隐藏或放宽，实际屏幕帧率也未验收。
+
+独立审计发现的编辑器边界已记录：多选到数字 2 使用现有 iBMSC 映射，目标是视觉第二列/BMS 通道 11；Session 层三颗音符一次 undo/redo 已通过，但真实主窗口 surface→Session 的单一贯通事件仍未单独自动化。WMV 使用随构建生成的 LGPL 静态 FFmpeg，Release app 未链接 Homebrew 动态库；完整许可/源码重链接材料保留在 `third_party/ffmpeg-lgpl`。
+
+2026-10-21 音频后端接入正在进行（覆盖下文旧冻结源状态）：Grok已新增原生分组混音桥、Swift session/worker并开始替换Legacy后端，B2构建接线已完成，A2已修复Swift类型错误，主程序与音频测试目标构建通过（未运行播放测试）。生命周期、分页缓存与预算等仍需独立关闭；A3正在修资源路径，**当前工作区不能沿用旧67/67作为新后端通过结论**。不得从这个中间状态宣称预览已完成。旧冻结可运行产品与新proof证据分别保留。
+
+分组proof父独立Release运行failure0：32voice共享mono资源、192k/4x/256帧离线混音+SRC p99约0.349ms（预算5.333ms），不是stereo多asset/分页/device/FPS。独立四组合流控制通过。ABI2 context桥plain/ASan/TSan父运行均0，独立query/oversize/stereo修复探针通过；真实Swift闭包退休仍是产品接入门槛。libsamplerate0.2.2官方源码已固定入third_party静态构建，11项源码hash父复核通过。
+
+2026-10-21 uBMplay 对照当前状态：原版只作外观与可观察行为参照，内部采用现代实现，禁止照搬过时限制或偶然缺陷。S9/G5/W7固定源的父代理Release构建与全套 **67/67 CTest通过**（136.49秒，parent-uat-build.log / parent-uat-ctest.log）。独立S9读回33组1,631,168像素、静态BGA 60组42,076,160像素零差；48组实际视频图层几何通过，最终视频合成像素仍未验收。这些数字不代表全部场景像素一致。
+
+当前产品音频仍有独立探针发现的多AVAudioPlayerNode在Varispeed下采样起点不一致问题，测试通过不关闭该问题。单Source原型已在隔离目录验证时序并完成命令/日志并发修复审计，尚未接入产品；libsamplerate逐声部方案32路192k/4x约10–13ms/256帧，超出5.33ms预算，不能批准接入。频带审计进一步否决固定48k预归一化作为完整音质默认（慢放高频会被提前删除）；Grok改验按native采样率分组混音、每组一个带限SRC、最终唯一输出轴的方案，性能、动态切换、缓存及输出钟仍需验收。50k音符加载准备由约492ms降至约8–9ms，此为准备耗时，不是帧率。
+
+大量实现由Cursor Grok 4.7 High Fast负责，独立审计由gpt-6.1-sol high负责，父代理协调、审查和独立验证。锁屏条件下实际presentedTime无有效值，不能宣称实际FPS或性能绝对超过原版；完整视频像素、mine音源、VOLWAV等仍有缺口。最新合同见[修复任务](tasks/20261020-preview-fix-contracts.md)和[现代化决策](tasks/20261020-ubmplay-modernization-decisions.md)。下面65/65与旧运行路径为历史记录。
+
+2026-10-20 追加：原生内置预览已有 Metal 下落谱面、1P/2P/Both、BGA 图片/视频和统一播放时间。独立 Debug 65/65、Release 预览 5/5 通过；Computer Use 未获准控制真实编辑器，实际声画同步未验收。运行入口与证据见 [内置 Metal 预览记录](validation/visual-preview-20261020.md)。以下正文保留较早批次的历史记录，预览当前状态以这份追加记录为准。
+
 本文记录 2026-09-10 的状态。它不是像素验收报告，也不表示 bmhelper、BmsONE 或 woslicer 已经做成。
 
 ## 产品要求（已确认）

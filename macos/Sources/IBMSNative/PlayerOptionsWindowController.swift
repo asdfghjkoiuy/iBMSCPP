@@ -31,7 +31,11 @@ final class PlayerOptionsWindowController: NSWindowController {
     func present(over parent: NSWindow, settings: EditorSettings, completion: @escaping (EditorSettings?) -> Void) {
         pendingResult = nil
         content.load(settings)
-        parent.beginSheet(window!) { [weak self] _ in
+        guard let sheet = window else {
+            completion(nil)
+            return
+        }
+        parent.beginSheet(sheet) { [weak self] _ in
             completion(self?.pendingResult)
         }
     }

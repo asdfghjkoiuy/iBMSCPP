@@ -262,16 +262,28 @@ private enum BmsONEExportTaskResult: Sendable {
 
 /// 后台导出只使用这份值快照；不得从此处访问 document 或任何 AppKit 对象。
 private func performBmsONEExport(_ snapshot: BmsONEExportSnapshot) -> BmsONEExportTaskResult {
+    var waveCache: [String: BmsONEMasterExport.StereoWave] = [:]
+    var absentWaveKeys = Set<String>()
     let mixed = BmsONEMasterExport.mix(
         initBpm: snapshot.initBpm,
         resolution: snapshot.resolution,
         bpmNotes: snapshot.bpmNotes,
         stopNotes: snapshot.stopNotes,
         channels: snapshot.channels.map { channel in
-            (
-                notes: channel.notes,
-                wave: loadBmsONEExportWave(named: channel.name, directory: snapshot.chartDirectory)
-            )
+            let key = bmsONEExportWaveKey(named: channel.name, directory: snapshot.chartDirectory)
+            let wave: BmsONEExportWave?
+            if let cached = waveCache[key] {
+                wave = cached
+            } else if absentWaveKeys.contains(key) {
+                wave = nil
+            } else if let loaded = loadBmsONEExportWave(named: channel.name, directory: snapshot.chartDirectory) {
+                waveCache[key] = loaded
+                wave = loaded
+            } else {
+                absentWaveKeys.insert(key)
+                wave = nil
+            }
+            return (notes: channel.notes, wave: wave)
         }
     )
     guard !Task.isCancelled else { return .cancelled }
@@ -290,6 +302,13 @@ private func performBmsONEExport(_ snapshot: BmsONEExportSnapshot) -> BmsONEExpo
     } catch {
         return .cannotOpen
     }
+}
+
+private func bmsONEExportWaveKey(named name: String, directory: URL?) -> String {
+    if let resolved = LegacyPreviewAudio.resolveAudioURL(fileName: name, chartDirectory: directory) {
+        return resolved.path
+    }
+    return "\(directory?.path ?? ""):\(name)"
 }
 
 /// PCM16 先按 `CheckFilename` 换扩展名；OGG 再解成 WAV。

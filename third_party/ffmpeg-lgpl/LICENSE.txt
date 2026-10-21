@@ -1,0 +1,14 @@
+预览用的 WMV/ASF 解码静态库来自 FFmpeg 7.1.1
+（libavutil、libavcodec、libavformat、libswscale）。
+
+这四份库按 GNU Lesser General Public License 2.1 或更新版本授权。
+全文是同目录的 COPYING.LGPLv2.1，内容与上述源码包里的同名文件一致。
+构建使用 --disable-gpl 和 --disable-nonfree，没有启用 x264、x265 或其他
+GPL / nonfree 组件，也不链接 Homebrew 的 FFmpeg 动态库。
+
+对应源码是 https://ffmpeg.org/releases/ffmpeg-7.1.1.tar.xz
+SHA-256 733984395e0dbbe5c046abda2dc49a5544e7e0e1e2366bba849222ae9e3a03b1
+重建和重新链接的步骤写在 RELINK.txt。build-static.sh 是实际的重建入口。
+
+这里的短说明只用来指向全文、源码和重链接步骤。
+它本身不是完整的 LGPL 文本，也不表示应用已经完成对外发布。

@@ -1,0 +1,9 @@
+# stdout
+UA2 chart-path: playChartReturn=2.828ms readyDelay=89.361ms deferredHit=0.015ms loads=2 voices=7
+UA4 long-bgm: sourceBytes=42336044 peakDecoded=0 streamBlock=1179648
+UA6 rate: ceiling=4.00 interval=0.250 stopWall=1.000 hereChart=0.408 hereWall=0.204
+
+# stderr
+overlap opens 1, main 0
+
+# exit 1

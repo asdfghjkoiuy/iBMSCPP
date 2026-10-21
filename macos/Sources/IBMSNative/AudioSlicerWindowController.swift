@@ -100,7 +100,12 @@ private final class AudioSlicerView: FlippedDialogView, NSTextFieldDelegate {
     private var previewPlayer: AVAudioPlayer?
     private let waveformView = AudioSlicerWaveformView(frame: .zero)
     private var waveformDuration: Double = 0
+    private var loadedInputURL: URL?
+    private var loadedInputModified: Date?
+    private var loadedInputSize: Int?
     private var loadedWav: BmhelperPcmWav?
+    private var trimmedWav: BmhelperPcmWav?
+    private var waveformColumnWidth = 0
     private var actionButtons: [NSButton] = []
     private var labels: [NSTextField] = []
 
@@ -263,9 +268,11 @@ private final class AudioSlicerView: FlippedDialogView, NSTextFieldDelegate {
         if actionButtons.indices.contains(6) { actionButtons[6].frame = NSRect(x: width - inset - 190, y: bottomY, width: 112, height: 28) }
         if actionButtons.indices.contains(7) { actionButtons[7].frame = NSRect(x: width - inset - 70, y: bottomY, width: 70, height: 28) }
         refreshWaveformMarks()
+        refreshWaveformColumnsIfNeeded()
     }
 
     func applyBmhelper(divisionName: String, notes: [MidiNoteEvent], quantize: Int) {
+        stopPreviewPlayback()
         mode = .bmhelper
         modeControl.selectedSegment = 0
         self.notes = notes
@@ -280,6 +287,7 @@ private final class AudioSlicerView: FlippedDialogView, NSTextFieldDelegate {
     }
 
     func applyWoslicer() {
+        stopPreviewPlayback()
         mode = .woslicer
         modeControl.selectedSegment = 1
         notes = []
@@ -289,7 +297,11 @@ private final class AudioSlicerView: FlippedDialogView, NSTextFieldDelegate {
         }
         refreshModeControls()
         refreshMarksField()
-        refreshWaveformMarks()
+        if loadedWav != nil {
+            publishWaveform()
+        } else {
+            refreshWaveformMarks()
+        }
         onTitleChange?(AudioSlicerLayout.title)
     }
 
@@ -308,6 +320,7 @@ private final class AudioSlicerView: FlippedDialogView, NSTextFieldDelegate {
     }
 
     @objc private func changeSliceMode() {
+        stopPreviewPlayback()
         mode = modeControl.selectedSegment == 0 ? .bmhelper : .woslicer
         refreshModeControls()
         reloadWaveform()
@@ -323,7 +336,11 @@ private final class AudioSlicerView: FlippedDialogView, NSTextFieldDelegate {
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
-        panel.allowedContentTypes = [.wav]
+        var allowed: [UTType] = [.wav, .audio]
+        if let ogg = UTType(filenameExtension: "ogg") {
+            allowed.append(ogg)
+        }
+        panel.allowedContentTypes = allowed
         panel.message = BmhelperAudioSplitterLayout.selectAudioTitle
         guard panel.runModal() == .OK, let url = panel.url else { return }
         setInput(url)
@@ -462,13 +479,24 @@ private final class AudioSlicerView: FlippedDialogView, NSTextFieldDelegate {
             request = .woslicer(marks: marks, offsetSeconds: offsetMs / 1000, duration: nil)
         }
         do {
-            let urls = try AudioSlice.splitFile(
-                mode: mode,
-                input: input,
-                outputDirectory: output,
-                prefix: prefix,
-                request: request
-            )
+            let urls: [URL]
+            if let cached = cachedInputWav(input) {
+                urls = try AudioSlice.splitFile(
+                    mode: mode,
+                    wav: cached,
+                    outputDirectory: output,
+                    prefix: prefix,
+                    request: request
+                )
+            } else {
+                urls = try AudioSlice.splitFile(
+                    mode: mode,
+                    input: input,
+                    outputDirectory: output,
+                    prefix: prefix,
+                    request: request
+                )
+            }
             presentSplitMessage(
                 NativeLocalization.format("Exported %d slices to %@", urls.count, output.path),
                 style: .informational
@@ -497,41 +525,51 @@ private final class AudioSlicerView: FlippedDialogView, NSTextFieldDelegate {
     }
 
     private func playPreview(previous: Bool) {
-        let input = URL(fileURLWithPath: inputField.stringValue)
-        guard !inputField.stringValue.isEmpty else {
+        guard !inputField.stringValue.isEmpty, let wav = waveformWavForDisplay() else {
             NSSound.beep()
             return
         }
         do {
-            let raw = try loadedPcm(input)
-            let wav = mode == .woslicer ? WoslicerTrim.trim(raw) : raw
-            let frames = wav.samples.count / max(wav.channels, 1)
-            let duration = Double(frames) / Double(max(wav.sampleRate, 1))
-            let current = Double(currentMarkField.stringValue) ?? 0
-            let offset = clipboardOffsetSeconds()
-            let range = previous
-                ? WoslicerPreview.previousSegment(
-                    current: current,
-                    marks: marks,
-                    duration: duration,
-                    offset: offset
+            let part: BmhelperPcmWav
+            if mode == .bmhelper {
+                guard let range = bmhelperPreviewSampleRange(wav: wav, previous: previous) else {
+                    NSSound.beep()
+                    return
+                }
+                part = BmhelperPcmWav(
+                    sampleRate: wav.sampleRate,
+                    channels: wav.channels,
+                    samples: Array(wav.samples[range.start..<range.end])
                 )
-                : WoslicerPreview.currentSegment(
-                    current: current,
-                    marks: marks,
-                    duration: duration,
-                    offset: offset
-                )
-            guard let range else {
-                NSSound.beep()
-                return
+            } else {
+                let frames = wav.samples.count / max(wav.channels, 1)
+                let duration = Double(frames) / Double(max(wav.sampleRate, 1))
+                let current = Double(currentMarkField.stringValue) ?? 0
+                let offset = clipboardOffsetSeconds()
+                let range = previous
+                    ? WoslicerPreview.previousSegment(
+                        current: current,
+                        marks: marks,
+                        duration: duration,
+                        offset: offset
+                    )
+                    : WoslicerPreview.currentSegment(
+                        current: current,
+                        marks: marks,
+                        duration: duration,
+                        offset: offset
+                    )
+                guard let range else {
+                    NSSound.beep()
+                    return
+                }
+                part = AudioSlice.extract(wav: wav, start: range.start, end: range.end)
             }
-            let part = AudioSlice.extract(wav: wav, start: range.start, end: range.end)
             guard !part.samples.isEmpty else {
                 NSSound.beep()
                 return
             }
-            let data = BmhelperWavIO.write(part)
+            let data = try BmhelperWavIO.write(part)
             stopPreviewPlayback()
             let player = try AVAudioPlayer(data: data)
             player.prepareToPlay()
@@ -546,6 +584,7 @@ private final class AudioSlicerView: FlippedDialogView, NSTextFieldDelegate {
     }
 
     private func setInput(_ url: URL) {
+        stopPreviewPlayback()
         inputField.stringValue = url.path
         if outputField.stringValue.isEmpty {
             outputField.stringValue = url.deletingLastPathComponent().path
@@ -560,37 +599,133 @@ private final class AudioSlicerView: FlippedDialogView, NSTextFieldDelegate {
     }
 
     private func reloadWaveform() {
+        stopPreviewPlayback()
         let path = inputField.stringValue
         guard !path.isEmpty else {
-            waveformDuration = 0
-            loadedWav = nil
-            waveformView.columns = []
-            waveformView.markXs = []
-            refreshActionAvailability()
+            clearWaveform()
             return
         }
-        guard let raw = try? AudioSlice.readPcm(URL(fileURLWithPath: path)) else {
-            loadedWav = nil
-            waveformDuration = 0
-            waveformView.columns = []
-            waveformView.markXs = []
-            refreshActionAvailability()
-            return
+        let url = URL(fileURLWithPath: path)
+        if !loadedWavMatches(url) {
+            guard let raw = try? AudioSlice.readPcm(url) else {
+                clearWaveform()
+                return
+            }
+            let stamp = fileStamp(url)
+            loadedInputURL = url
+            loadedInputModified = stamp?.modified
+            loadedInputSize = stamp?.size
+            loadedWav = raw
+            trimmedWav = nil
         }
-        loadedWav = raw
-        let waveformWav = mode == .woslicer ? WoslicerTrim.trim(raw) : raw
-        let frames = waveformWav.samples.count / max(waveformWav.channels, 1)
-        waveformDuration = Double(frames) / Double(max(waveformWav.sampleRate, 1))
-        waveformView.columns = WoslicerWaveform.columns(samples: waveformWav.samples, channels: waveformWav.channels)
-        refreshWaveformMarks()
+        publishWaveform()
         refreshActionAvailability()
     }
 
-    private func loadedPcm(_ input: URL) throws -> BmhelperPcmWav {
-        if let loadedWav, input.path == inputField.stringValue { return loadedWav }
-        let raw = try AudioSlice.readPcm(input)
-        loadedWav = raw
-        return raw
+    private func loadedWavMatches(_ url: URL) -> Bool {
+        guard loadedWav != nil, let loadedInputURL, loadedInputURL.path == url.path else { return false }
+        guard let stamp = fileStamp(url) else { return false }
+        return stamp.modified == loadedInputModified && stamp.size == loadedInputSize
+    }
+
+    private func cachedInputWav(_ url: URL) -> BmhelperPcmWav? {
+        guard loadedWavMatches(url) else { return nil }
+        return loadedWav
+    }
+
+    private func fileStamp(_ url: URL) -> (modified: Date, size: Int)? {
+        let keys: Set<URLResourceKey> = [.contentModificationDateKey, .fileSizeKey]
+        guard let values = try? url.resourceValues(forKeys: keys),
+              let modified = values.contentModificationDate,
+              let size = values.fileSize
+        else {
+            return nil
+        }
+        return (modified, size)
+    }
+
+    private func waveformWavForDisplay() -> BmhelperPcmWav? {
+        guard let loadedWav else { return nil }
+        if mode == .bmhelper { return loadedWav }
+        if let trimmedWav { return trimmedWav }
+        let trimmed = WoslicerTrim.trim(loadedWav)
+        trimmedWav = trimmed
+        return trimmed
+    }
+
+    private func publishWaveform() {
+        guard let waveformWav = waveformWavForDisplay() else {
+            waveformDuration = 0
+            waveformColumnWidth = 0
+            waveformView.columns = []
+            waveformView.markXs = []
+            return
+        }
+        let frames = waveformWav.samples.count / max(waveformWav.channels, 1)
+        waveformDuration = Double(frames) / Double(max(waveformWav.sampleRate, 1))
+        let width = max(780, Int(waveformView.bounds.width))
+        waveformColumnWidth = width
+        waveformView.columns = WoslicerWaveform.columns(
+            samples: waveformWav.samples,
+            channels: waveformWav.channels,
+            width: width
+        )
+        refreshWaveformMarks()
+    }
+
+    private func refreshWaveformColumnsIfNeeded() {
+        let width = max(780, Int(waveformView.bounds.width))
+        guard width != waveformColumnWidth, loadedWav != nil else { return }
+        publishWaveform()
+    }
+
+    private func clearWaveform() {
+        waveformDuration = 0
+        loadedInputURL = nil
+        loadedInputModified = nil
+        loadedInputSize = nil
+        loadedWav = nil
+        trimmedWav = nil
+        waveformColumnWidth = 0
+        waveformView.columns = []
+        waveformView.markXs = []
+        refreshActionAvailability()
+    }
+
+    private func bmhelperPreviewSampleRange(wav: BmhelperPcmWav, previous: Bool) -> (start: Int, end: Int)? {
+        let times = BmhelperWavSplit.splitPoints(
+            notes: notes,
+            quantize: quantize,
+            bpm: clamped(
+                Double(bpmField.stringValue) ?? BmhelperAudioSplitterLayout.defaultBpm,
+                BmhelperAudioSplitterLayout.bpmMinimum,
+                BmhelperAudioSplitterLayout.bpmMaximum
+            ),
+            offsetMs: clamped(
+                Double(offsetField.stringValue) ?? BmhelperAudioSplitterLayout.defaultOffsetMs,
+                BmhelperAudioSplitterLayout.offsetMinimum,
+                BmhelperAudioSplitterLayout.offsetMaximum
+            )
+        )
+        let ranges = BmhelperWavSplit.sliceRanges(wav: wav, times: times)
+        guard !ranges.isEmpty else { return nil }
+        let channels = max(wav.channels, 1)
+        let sampleRate = max(wav.sampleRate, 1)
+        let current = Double(currentMarkField.stringValue) ?? 0
+        let frame = min(max(Int(current * Double(sampleRate)), 0), max(wav.samples.count / channels, 0))
+        let sample = frame * channels
+        var index = -1
+        for candidate in ranges.indices where ranges[candidate].start <= sample {
+            index = candidate
+        }
+        guard index >= 0 else { return nil }
+        if previous {
+            guard index > 0 else { return nil }
+            index -= 1
+        }
+        let range = ranges[index]
+        guard range.end > range.start, range.start >= 0, range.end <= wav.samples.count else { return nil }
+        return range
     }
 
     private func refreshActionAvailability() {

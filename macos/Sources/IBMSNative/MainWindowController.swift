@@ -49,6 +49,11 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
     private let stopPreviewHandler: () -> Void
     private let content: MainWindowContentView
     private var session: DocumentSession?
+    /// 同一份未保存字节只展开一次。重载才清掉，播放头移动不重新掷骰。
+    private var previewRandomCache = PreviewBmsRandomCache()
+    /// 测试注入的 `#RANDOM` 选择。`nil` 时每个上限在 `1...max` 里取一次。
+    private var previewRandomInjection: [Int]?
+    private var previewSourceCache: PreviewSourceCache?
     /// BMSON 文档。和 `session` 互斥，不套进 BMS。
     private var bmsonDocument: BmsONEDocument?
     /// 对照 `MainWindow::viewMode`。只改画面，不写 `info.modeHint`。
@@ -104,6 +109,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
         beepWhileSaved: { [weak self] in self?.editorSettingsStore.settings.beepWhileSaved ?? true }
     )
     private var isPresentingSheet = false
+    private var refreshSuppressionDepth = 0
+    private let closePreview: () -> Void
     private var queuedErrors: [Error] = []
     private var allowWindowClose = false
     private var skipNextTerminationPrompt = false
@@ -119,12 +126,14 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
         hidePreview: @escaping () -> Void,
         playFromBeginning: @escaping () -> Void,
         playFromHere: @escaping () -> Void,
-        stopPreview: @escaping () -> Void
+        stopPreview: @escaping () -> Void,
+        closePreview: @escaping () -> Void = {}
     ) {
         self.state = state
         playFromBeginningHandler = playFromBeginning
         playFromHereHandler = playFromHere
         stopPreviewHandler = stopPreview
+        self.closePreview = closePreview
         content = MainWindowContentView(state: state)
         let clientSize = NSSize(width: 1082, height: 730)
         let window = NSWindow(contentRect: NSRect(origin: .zero, size: clientSize), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
@@ -219,7 +228,11 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
             exportIBMSC: { [weak self] in self?.exportIBMSC(nil) },
             showMyO2: { [weak self] in self?.showMyO2(nil) },
             hidePreview: hidePreview,
-            refresh: { [weak self] in self?.refreshWindow() }
+            refresh: { [weak self] in self?.refreshWindow() },
+            withCompound: { [weak self] body in
+                guard let self else { return }
+                try self.performSessionCompound(body)
+            }
         )
         content.setOpenRecent { [weak self] index in
             self?.openRecentSlot(index)
@@ -405,50 +418,34 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
         content.setPreviewPlayheadBeat(beat)
     }
 
+    /// 清掉已展开的预览分支。下一次预览才按当前注入值或 `1...max` 再选一次。
+    /// 不改编辑文档，也不接空格键。
+    func reloadPreviewRandomization() {
+        previewRandomCache.reload()
+        previewSourceCache = nil
+    }
+
+    /// 固定 `#RANDOM` 的选择，供测试注入。不清除缓存；同一字节要换支先 `reloadPreviewRandomization()`。
+    func setPreviewRandomChoices(_ values: [Int]?) {
+        previewRandomInjection = values
+    }
+
+    /// 当前缓存的选择。还没展开时是空数组。
+    var previewRandomValues: [Int] {
+        previewRandomCache.storedValues
+    }
+
     /// 内置预听用的谱面字节、目录、音符和速度。Play Here 用鼠标所在拍。
+    /// 条件谱用原字节展开一次并缓存，不写回编辑文档。画面不另存临时文件。
     func previewAudioContext() -> PreviewAudioDocumentContext? {
         if let bmsonDocument {
             return bmsonPreviewContext(bmsonDocument)
         }
-        guard let (data, fileURL) = currentDocumentBytes() else { return nil }
-        let timingSnapshot = session?.timingSnapshot ?? .unavailable
-        let headerBPM = Double(timingSnapshot.initialBPMDecimal) ?? 120
-        var bpmEvents: [(beat: Double, bpm: Double)] = []
-        var stopEvents: [(beat: Double, durationSeconds: Double)] = []
-        if timingSnapshot.available {
-            for event in timingSnapshot.events {
-                let beat = Double(event.beat.numerator) / Double(max(1, event.beat.denominator))
-                switch event.kind {
-                case .bpm:
-                    if let bpm = Double(event.valueDecimal), bpm > 0 {
-                        bpmEvents.append((beat, bpm))
-                    }
-                case .stop:
-                    guard event.hasTime else { continue }
-                    let duration = event.secondsAfterStop - event.secondsBeforeStop
-                    if duration > 0 {
-                        stopEvents.append((beat, duration))
-                    }
-                }
-            }
-        }
-        var notes: [PreviewAudioNote] = []
-        let pairedLines = Set((session?.longNoteSnapshot.notes ?? []).flatMap { [$0.start.sourceLine, $0.end.sourceLine] })
-        for event in session?.chartSnapshot.events ?? [] {
-            if pairedLines.contains(event.sourceLine) { continue }
-            guard LegacyPreviewAudio.isAudibleChannel(event.channel) else { continue }
-            notes.append(PreviewAudioNote(beat: event.beat, wavToken: event.token))
-        }
-        for longNote in session?.longNoteSnapshot.notes ?? [] {
-            guard LegacyPreviewAudio.isAudibleChannel(longNote.channel) else { continue }
-            notes.append(PreviewAudioNote(beat: longNote.start.beat, wavToken: longNote.start.token))
-        }
-        return PreviewAudioDocumentContext(
-            documentData: data,
-            chartDirectory: fileURL?.deletingLastPathComponent(),
-            notes: notes,
-            timing: PreviewAudioTiming(headerBPM: headerBPM, bpmEvents: bpmEvents, stopEvents: stopEvents),
-            playHereBeat: content.lastPointerBeat
+        guard let source = previewReadOnlyChart() else { return nil }
+        return bmsPreviewContext(
+            session: source.session,
+            chartBytes: source.bytes,
+            chartDirectory: source.directory
         )
     }
 
@@ -469,15 +466,126 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
             )
             return
         }
-        guard let (data, fileURL) = currentDocumentBytes() else { return }
-        let table = LegacyPreviewAudio.parseWavTable(from: data)
+        guard let source = previewReadOnlyChart() else { return }
+        let table = PreviewBmsSource.resources(from: source.bytes, chartDirectory: source.directory).wavFiles
         guard let name = LegacyPreviewAudio.fileName(forToken: token, in: table),
               let url = LegacyPreviewAudio.resolveAudioURL(
                 fileName: name,
-                chartDirectory: fileURL?.deletingLastPathComponent()
+                chartDirectory: source.directory
               )
         else { return }
         state.previewPlayer.playFile(url: url)
+    }
+
+    private struct PreviewSourceCache {
+        var raw: Data
+        var chartSession: DocumentSession
+        var chartBytes: Data
+    }
+
+    /// 编辑文档的 `currentBytes` 决定本次源。条件控制行清掉之后，音符、画面和速度都读这份展开结果。
+    /// 从头、Home、Here 只改 `playHereBeat`，不重新掷骰。
+    private func previewReadOnlyChart() -> (session: DocumentSession, bytes: Data, directory: URL?)? {
+        guard let session else { return nil }
+        let raw: Data
+        do {
+            raw = try session.currentBytes()
+        } catch {
+            return nil
+        }
+        let directory = session.fileURL?.deletingLastPathComponent()
+        if let cached = previewSourceCache, cached.raw == raw {
+            return (cached.chartSession, cached.chartBytes, directory)
+        }
+        let maxima: [Int]
+        do {
+            maxima = try IBMSBmsonBridge.randomMaxima(fromBmsData: raw).map(\.intValue)
+        } catch {
+            return nil
+        }
+        guard PreviewBmsSource.shouldExpand(maxima: maxima, hasConditionals: session.hasConditionals) else {
+            previewSourceCache = PreviewSourceCache(raw: raw, chartSession: session, chartBytes: raw)
+            return (session, raw, directory)
+        }
+        do {
+            let resolution = try previewRandomCache.resolve(
+                raw: raw,
+                maxima: maxima,
+                injected: previewRandomInjection
+            ) { raw, values in
+                try IBMSBmsonBridge.applyRandom(
+                    to: raw,
+                    values: values.map { NSNumber(value: $0) },
+                    skipBetweenRandomAndIf: false
+                )
+            }
+            let expanded = try DocumentSession(data: resolution.branch.expanded, fileURL: session.fileURL)
+            previewSourceCache = PreviewSourceCache(
+                raw: raw,
+                chartSession: expanded,
+                chartBytes: resolution.branch.expanded
+            )
+            return (expanded, resolution.branch.expanded, directory)
+        } catch {
+            return nil
+        }
+    }
+
+    private func bmsPreviewContext(
+        session: DocumentSession,
+        chartBytes: Data,
+        chartDirectory: URL?
+    ) -> PreviewAudioDocumentContext {
+        let timingSnapshot = session.timingSnapshot
+        let headerBPM = Double(timingSnapshot.initialBPMDecimal) ?? 120
+        var bpmEvents: [(beat: Double, bpm: Double)] = []
+        var stopEvents: [(beat: Double, durationSeconds: Double)] = []
+        if timingSnapshot.available {
+            for event in timingSnapshot.events {
+                let beat = Double(event.beat.numerator) / Double(max(1, event.beat.denominator))
+                switch event.kind {
+                case .bpm:
+                    if let bpm = Double(event.valueDecimal), bpm > 0 {
+                        bpmEvents.append((beat, bpm))
+                    }
+                case .stop:
+                    guard event.hasTime else { continue }
+                    let duration = event.secondsAfterStop - event.secondsBeforeStop
+                    if duration > 0 {
+                        stopEvents.append((beat, duration))
+                    }
+                }
+            }
+        }
+        let events = bmsPreviewEvents(session)
+        let longs = bmsPreviewLongNotes(session)
+        let measures = session.chartSnapshot.measures.map {
+            LegacyBmsonPreview.BmsPreviewMeasure(start: $0.start, length: $0.length)
+        }
+        let playerHeader = (try? session.metadataValue(for: "PLAYER")) ?? ""
+        let lanes = LegacyBmsonPreview.bmsVisualLanes(
+            playerHeader: playerHeader,
+            events: events,
+            longNotes: longs
+        )
+        let audible = LegacyBmsonPreview.audibleBmsNotes(events: events, longNotes: longs)
+        let song = PreviewBmsSource.metadata(from: chartBytes, noteCount: audible.count)
+        let bmpNames = LegacyWavList.table(from: (try? session.bmpNames()) ?? [])
+        return PreviewAudioDocumentContext(
+            documentData: PreviewBmsSource.previewDocumentData(data: chartBytes, chartDirectory: chartDirectory),
+            chartDirectory: chartDirectory,
+            notes: audible,
+            timing: PreviewAudioTiming(headerBPM: headerBPM, bpmEvents: bpmEvents, stopEvents: stopEvents),
+            playHereBeat: content.lastPointerBeat,
+            visualChart: LegacyBmsonPreview.bmsVisualChart(
+                title: song.title ?? "",
+                events: events,
+                longNotes: longs,
+                measures: measures,
+                lanes: lanes,
+                bmpNames: bmpNames
+            ).chart
+        )
     }
 
     private func bmsonPreviewContext(_ document: BmsONEDocument) -> PreviewAudioDocumentContext {
@@ -487,7 +595,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
                 (
                     name: channel.name,
                     notes: channel.notes.map {
-                        LegacyBmsonPreview.SoundNote(y: $0.y, continueFlag: $0.c)
+                        LegacyBmsonPreview.SoundNote(y: $0.y, continueFlag: $0.c, x: $0.x, l: $0.l)
                     }
                 )
             },
@@ -496,7 +604,57 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
             resolution: document.resolution,
             chartDirectory: document.filePath.map { URL(fileURLWithPath: $0).deletingLastPathComponent() },
             playHereBeat: content.lastPointerBeat,
-            stopNotes: document.stopNotes.map { ($0.y, $0.v) }
+            stopNotes: document.stopNotes.map { ($0.y, $0.v) },
+            title: document.title,
+            modeHint: document.modeHint,
+            barLines: document.lines.map(\.y),
+            bgaHeaders: document.bgaHeaders.map { (id: Int($0.identifier), name: $0.name) },
+            bgaEvents: document.bgaEvents.map { (y: $0.y, id: Int($0.identifier)) },
+            layerEvents: document.layerEvents.map { (y: $0.y, id: Int($0.identifier)) },
+            poorEvents: document.poorEvents.map { (y: $0.y, id: Int($0.identifier)) },
+            artist: document.info.artist,
+            genre: document.info.genre,
+            playLevel: document.level,
+            judgeRank: document.judgeRank
+        )
+    }
+
+    /// 预览只读快照。显示通道用 `ChartLayout.displayChannel`，不在这里猜列号。
+    private func bmsPreviewEvents(_ session: DocumentSession) -> [LegacyBmsonPreview.BmsPreviewEvent] {
+        session.chartSnapshot.events.map { event in
+            LegacyBmsonPreview.BmsPreviewEvent(
+                channel: event.channel,
+                beat: event.beat,
+                kind: event.kind,
+                sourceLine: event.sourceLine,
+                measure: event.measure,
+                fractionNumerator: event.fractionNumerator,
+                fractionDenominator: event.fractionDenominator,
+                token: event.token,
+                displayChannel: ChartLayout.displayChannel(event.channel)
+            )
+        }
+    }
+
+    private func bmsPreviewLongNotes(_ session: DocumentSession) -> [LegacyBmsonPreview.BmsPreviewLongNote] {
+        session.longNoteSnapshot.notes.map { note in
+            LegacyBmsonPreview.BmsPreviewLongNote(
+                channel: note.channel,
+                start: bmsPreviewEndpoint(note.start),
+                end: bmsPreviewEndpoint(note.end),
+                displayChannel: ChartLayout.displayChannel(note.channel)
+            )
+        }
+    }
+
+    private func bmsPreviewEndpoint(_ endpoint: LongNoteEndpointSnapshot) -> LegacyBmsonPreview.BmsPreviewEndpoint {
+        LegacyBmsonPreview.BmsPreviewEndpoint(
+            measure: endpoint.measure,
+            fractionNumerator: endpoint.fractionNumerator,
+            fractionDenominator: endpoint.fractionDenominator,
+            beat: endpoint.beat,
+            token: endpoint.token,
+            sourceLine: endpoint.sourceLine
         )
     }
 
@@ -1205,10 +1363,13 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
         alert.messageText = BmsONEDialogLayout.externalViewerErrorTitle
         alert.informativeText = BmsONEDialogLayout.externalViewerFailed
         alert.alertStyle = .warning
-        if let window {
-            alert.beginSheetModal(for: window)
-        } else {
+        guard let window else {
             alert.runModal()
+            return
+        }
+        guard beginSheet() else { return }
+        alert.beginSheetModal(for: window) { [weak self] _ in
+            self?.finishSheet()
         }
     }
 
@@ -1511,9 +1672,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
 
     private func activeBmsonChannels(in document: BmsONEDocument) -> [Bool] {
         if document.filePath != bmsonWaveSummaryDocument {
-            bmsonWaveSummaries.removeAll()
-            bmsonOverallWaveforms.removeAll()
-            bmsonLaneRms.removeAll()
+            clearBmsonWaveCaches()
             bmsonWaveSummaryDocument = document.filePath
         }
         let range = content.visibleBmsonPulseRange(resolution: document.resolution)
@@ -1817,7 +1976,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
         guard isOnlyRunningInstance() else { return }
         let folder = LegacyAutoSave.directory()
         let files = LegacyAutoSave.listSnapshots(in: folder)
-        guard !files.isEmpty, let window else { return }
+        guard !files.isEmpty, let window, beginSheet() else { return }
         recoveredAutoSaveFiles = files
         let alert = NSAlert()
         alert.messageText = LegacyAutoSave.restoreMessage(count: files.count)
@@ -1825,9 +1984,11 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
         alert.addButton(withTitle: "No")
         alert.beginSheetModal(for: window) { [weak self] response in
             guard let self else { return }
-            if response == .alertFirstButtonReturn {
-                for file in files {
-                    self.launchNewInstance(file)
+            self.finishSheet {
+                if response == .alertFirstButtonReturn {
+                    for file in files {
+                        self.launchNewInstance(file)
+                    }
                 }
             }
         }
@@ -1843,6 +2004,11 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
     }
 
     func windowWillClose(_ notification: Notification) {
+        autoSaveTimer?.invalidate()
+        autoSaveTimer = nil
+        cleanExternalViewerTemp()
+        dismissAuxiliaryWindows()
+        closePreview()
         deleteAutoSaveFiles()
     }
 
@@ -1868,6 +2034,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
             importedDocumentTitle = nil
             cleanExternalViewerTemp()
             bmsonDocument = nil
+            clearBmsonWaveCaches()
             ibmscSnapshot = nil
             session = loaded
             lastBmsInitPath = url.deletingLastPathComponent().path
@@ -1886,9 +2053,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
         cleanExternalViewerTemp()
         bmsonDocument = document
         bmsonViewMode = BmsONEViewMode.resolve(document.modeHint)
-        bmsonWaveSummaries.removeAll()
-        bmsonOverallWaveforms.removeAll()
-        bmsonLaneRms.removeAll()
+        clearBmsonWaveCaches()
         bmsonWaveSummaryDocument = document.filePath
     }
 
@@ -1981,6 +2146,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
     }
 
     private func writeAutoSaveSnapshot() {
+        guard !isPresentingSheet, hasUnsavedChanges else { return }
         guard bmsonDocument == nil, session != nil else { return }
         do {
             try FileManager.default.createDirectory(
@@ -2092,8 +2258,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
                 lnobj: lnobj
             )
             importedDocumentTitle = "Untitled.bms"
+            dismissAuxiliaryWindows()
             cleanExternalViewerTemp()
             bmsonDocument = nil
+            clearBmsonWaveCaches()
             ibmscSnapshot = nil
             session = try DocumentSession(data: Data())
             content.discardPendingMetadata()
@@ -2121,8 +2289,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
         do {
             guard let document = LegacyIBMSC.parse(try Data(contentsOf: url)) else { return }
             importedDocumentTitle = "Imported_" + url.lastPathComponent
+            dismissAuxiliaryWindows()
             cleanExternalViewerTemp()
             bmsonDocument = nil
+            clearBmsonWaveCaches()
             ibmscSnapshot = document
             session = try DocumentSession(data: Data())
             content.discardPendingMetadata()
@@ -2648,6 +2818,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
     }
 
     private func reloadIBMSCNotes(_ document: IBMSCDocument) throws {
+        clearBmsonWaveCaches()
         session = try DocumentSession(data: Data())
         content.discardPendingMetadata()
         content.setNTInputEnabled(document.ntInput)
@@ -3001,6 +3172,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
                 importedDocumentTitle = nil
                 cleanExternalViewerTemp()
                 bmsonDocument = nil
+                clearBmsonWaveCaches()
                 ibmscSnapshot = nil
                 session = try DocumentSession(data: Data())
                 content.discardPendingMetadata()
@@ -3515,8 +3687,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
         do {
             if let session {
                 let items = content.selectedChartItems()
-                try session.mirrorNotes(Array(items.events))
-                try session.mirrorLongNotes(Array(items.longNotes))
+                try performSessionCompound {
+                    try session.mirrorNotes(Array(items.events))
+                    try session.mirrorLongNotes(Array(items.longNotes))
+                }
             } else if let bmsonDocument {
                 try bmsonDocument.mirrorNotes(
                     identities: selectedBmsonNoteIdentities(),
@@ -3587,32 +3761,42 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
             let numeric = items.events.filter { ChartConvert.isNumericChannel($0.channel) }
             let labels = items.events.filter { !ChartConvert.isNumericChannel($0.channel) }
             if numeric.isEmpty && labels.isEmpty && items.longNotes.isEmpty { return }
-            do {
-                if !numeric.isEmpty {
-                    guard let text = promptTimingValue(message: currentRuntime.promptEnterNumeric) else { return }
-                    guard let decimal = ChartConvert.modifyNumeric(text) else { return }
-                    try session.modifyTimingValues(Array(numeric), decimal: decimal)
+            var numericDecimal: String?
+            if !numeric.isEmpty {
+                guard let text = promptTimingValue(message: currentRuntime.promptEnterNumeric) else { return }
+                guard let decimal = ChartConvert.modifyNumeric(text) else { return }
+                numericDecimal = decimal
+            }
+            var labelToken: String?
+            if !labels.isEmpty || !items.longNotes.isEmpty {
+                guard let text = promptModifyLabel() else { return }
+                guard let token = ChartConvert.modifyLabel(text) else {
+                    presentInvalidLabel()
+                    return
                 }
-                if !labels.isEmpty || !items.longNotes.isEmpty {
-                    guard let text = promptModifyLabel() else { return }
-                    guard let token = ChartConvert.modifyLabel(text) else {
-                        presentInvalidLabel()
-                        return
+                labelToken = token
+            }
+            do {
+                try performSessionCompound {
+                    if let numericDecimal {
+                        try session.modifyTimingValues(Array(numeric), decimal: numericDecimal)
                     }
-                    try session.modifyNoteLabels(Array(labels), label: token)
-                    for note in items.longNotes {
-                        try session.eraseLongNote(note)
-                        try session.insertLongNote(
-                            channel: note.channel,
-                            startMeasure: note.start.measure,
-                            startNumerator: note.start.fractionNumerator,
-                            startDenominator: note.start.fractionDenominator,
-                            endMeasure: note.end.measure,
-                            endNumerator: note.end.fractionNumerator,
-                            endDenominator: note.end.fractionDenominator,
-                            startToken: token,
-                            endToken: note.encoding == "lnobj" ? note.end.token : token
-                        )
+                    if let labelToken {
+                        try session.modifyNoteLabels(Array(labels), label: labelToken)
+                        for note in items.longNotes {
+                            try session.eraseLongNote(note)
+                            try session.insertLongNote(
+                                channel: note.channel,
+                                startMeasure: note.start.measure,
+                                startNumerator: note.start.fractionNumerator,
+                                startDenominator: note.start.fractionDenominator,
+                                endMeasure: note.end.measure,
+                                endNumerator: note.end.fractionNumerator,
+                                endDenominator: note.end.fractionDenominator,
+                                startToken: labelToken,
+                                endToken: note.encoding == "lnobj" ? note.end.token : labelToken
+                            )
+                        }
                     }
                 }
                 refreshWindow()
@@ -4144,6 +4328,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
             }
         } else if let bmsonDocument {
             bmsonDocument.convertShortNoteToLongEndpoint(identity: event.sourceLine)
+            refreshWindow()
             return true
         }
         return false
@@ -4162,6 +4347,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
             }
         } else if let bmsonDocument {
             bmsonDocument.convertLongEndpointToShort(identity: event.sourceLine)
+            refreshWindow()
             return true
         }
         return false
@@ -4221,16 +4407,18 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
         guard !isPresentingSheet else { return false }
         if let session {
             do {
-                for copy in shorts {
-                    try session.copyNote(copy.event, toChannel: copy.channel, vPosition: copy.vPosition)
-                }
-                for copy in longs {
-                    try session.copyLongNote(
-                        copy.note,
-                        toChannel: copy.channel,
-                        vPosition: copy.vPosition,
-                        length: copy.length
-                    )
+                try performSessionCompound {
+                    for copy in shorts {
+                        try session.copyNote(copy.event, toChannel: copy.channel, vPosition: copy.vPosition)
+                    }
+                    for copy in longs {
+                        try session.copyLongNote(
+                            copy.note,
+                            toChannel: copy.channel,
+                            vPosition: copy.vPosition,
+                            length: copy.length
+                        )
+                    }
                 }
                 refreshWindow()
                 return true
@@ -4360,7 +4548,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
         }
     }
 
-    /// 打开 BMSON 时 Cut / Delete 一批一笔。BMS 仍逐条擦。
+    /// Cut / Delete 一批收成一次写入，结束只刷新一次。
     private func eraseSelection(
         events: Set<ChartEventSnapshot>,
         longNotes: Set<LongNoteSnapshot>
@@ -4369,14 +4557,23 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
         if let document = bmsonDocument {
             return eraseBmsonSelection(events: events, longNotes: longNotes, document: document)
         }
-        var changed = false
-        for note in longNotes {
-            if eraseLongNote(note) { changed = true }
+        guard let session else { return false }
+        if longNotes.isEmpty && events.isEmpty { return false }
+        do {
+            try performSessionCompound {
+                for note in longNotes {
+                    try session.eraseLongNote(note)
+                }
+                for event in events {
+                    try session.eraseNote(event)
+                }
+            }
+            refreshWindow()
+            return true
+        } catch {
+            presentErrorSheet(error)
+            return false
         }
-        for event in events {
-            if eraseNote(event) { changed = true }
-        }
-        return changed
     }
 
     private func eraseBmsonSelection(
@@ -4556,14 +4753,16 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
         guard let session else { return "Open or create a document before deleting notes." }
         let matches = LegacyChartQuery.matchesForEdit(currentQueryNotes(), query: query)
         do {
-            for note in matches {
-                switch note.source {
-                case .longNote(let longNote):
-                    try session.eraseLongNote(longNote)
-                case .timing(let event):
-                    try session.eraseTimingEvent(event)
-                case .event(let event):
-                    try session.eraseNote(event)
+            try performSessionCompound {
+                for note in matches {
+                    switch note.source {
+                    case .longNote(let longNote):
+                        try session.eraseLongNote(longNote)
+                    case .timing(let event):
+                        try session.eraseTimingEvent(event)
+                    case .event(let event):
+                        try session.eraseNote(event)
+                    }
                 }
             }
             refreshWindow()
@@ -5090,6 +5289,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
         resetChartPosition: Bool = false,
         waveformInputMayHaveChanged: Bool = true
     ) {
+        guard refreshSuppressionDepth == 0 else { return }
         if let bmsonDocument {
             let shown = shownBmsonChannels(in: bmsonDocument)
             lastShownBmsonChannels = shown ?? []
@@ -5332,23 +5532,53 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
     }
 
     private func dismissTimingWindow() {
+        guard timingWindowController.isWindowLoaded else { return }
         timingWindowController.window?.orderOut(self)
     }
 
     private func dismissAuxiliaryWindows() {
         dismissTimingWindow()
-        findWindowController.window?.orderOut(self)
-        aboutWindowController.window?.orderOut(self)
-        myO2WindowController.window?.orderOut(self)
-        for controller in [visualOptionsWindowController, generalOptionsWindowController, playerOptionsWindowController] as [NSWindowController] {
-            if let sheet = controller.window, sheet.sheetParent != nil {
-                sheet.sheetParent?.endSheet(sheet)
-            }
-        }
-        if let statistics = statisticsWindowController.window, statistics.sheetParent != nil {
-            statistics.sheetParent?.endSheet(statistics)
+        dismissLoadedWindow(findWindowController)
+        dismissLoadedWindow(aboutWindowController)
+        dismissLoadedWindow(myO2WindowController)
+        dismissLoadedWindow(visualOptionsWindowController)
+        dismissLoadedWindow(generalOptionsWindowController)
+        dismissLoadedWindow(playerOptionsWindowController)
+        dismissLoadedWindow(statisticsWindowController)
+        dismissLoadedWindow(importSMWindowController)
+        dismissLoadedWindow(loadProgressWindowController)
+        dismissLoadedWindow(bmsonImportDialog)
+        dismissLoadedWindow(bmsonExportWavDialog)
+        dismissLoadedWindow(bmsonConvertResolutionDialog)
+        dismissLoadedWindow(bmsonGridSettingDialog)
+        dismissLoadedWindow(bmsonPreferencesDialog)
+        dismissLoadedWindow(bmsonExternalViewerDialog)
+    }
+
+    private func dismissLoadedWindow(_ controller: NSWindowController) {
+        guard controller.isWindowLoaded, let window = controller.window else { return }
+        if let parent = window.sheetParent {
+            parent.endSheet(window)
         } else {
-            statisticsWindowController.window?.orderOut(self)
+            window.orderOut(nil)
+        }
+    }
+
+    private func clearBmsonWaveCaches() {
+        bmsonWaveSummaries.removeAll()
+        bmsonOverallWaveforms.removeAll()
+        bmsonLaneRms.removeAll()
+        bmsonWaveSummaryDocument = nil
+    }
+
+    /// 批量编辑包进一次可重入 compound，循环里的 `refreshWindow` 先压住，调用方结束再刷一次。
+    private func performSessionCompound(_ body: () throws -> Void) throws {
+        refreshSuppressionDepth += 1
+        defer { refreshSuppressionDepth -= 1 }
+        if let session {
+            try session.withCompound(body)
+        } else {
+            try body()
         }
     }
 }

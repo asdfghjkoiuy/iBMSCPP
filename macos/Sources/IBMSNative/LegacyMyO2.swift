@@ -112,38 +112,67 @@ enum LegacyMyO2 {
         if !ntInput {
             for index in 1..<next.count {
                 if next[index].columnIndex == EditorColumn.bpm {
-                    time += (next[index].vPosition - cursor) / Double(bpm)
+                    if let step = finiteQuotient(next[index].vPosition - cursor, bpm: bpm) {
+                        time += step
+                    }
                     cursor = next[index].vPosition
-                    bpm = next[index].value
-                } else {
-                    next[index].vPosition = Double(target) * (time + (next[index].vPosition - cursor) / Double(bpm))
+                    if next[index].value > 0 {
+                        bpm = next[index].value
+                    }
+                } else if let step = finiteQuotient(next[index].vPosition - cursor, bpm: bpm) {
+                    let mapped = Double(target) * (time + step)
+                    if mapped.isFinite {
+                        next[index].vPosition = mapped
+                    }
                 }
             }
         } else {
             for index in 1..<next.count {
                 if next[index].columnIndex == EditorColumn.bpm {
-                    time += (next[index].vPosition - cursor) / Double(bpm)
+                    if let step = finiteQuotient(next[index].vPosition - cursor, bpm: bpm) {
+                        time += step
+                    }
                     cursor = next[index].vPosition
-                    bpm = next[index].value
+                    if next[index].value > 0 {
+                        bpm = next[index].value
+                    }
                 } else if next[index].length == 0 {
-                    next[index].vPosition = Double(target) * (time + (next[index].vPosition - cursor) / Double(bpm))
-                } else {
-                    let startTime = time + (next[index].vPosition - cursor) / Double(bpm)
+                    if let step = finiteQuotient(next[index].vPosition - cursor, bpm: bpm) {
+                        let mapped = Double(target) * (time + step)
+                        if mapped.isFinite {
+                            next[index].vPosition = mapped
+                        }
+                    }
+                } else if let startStep = finiteQuotient(next[index].vPosition - cursor, bpm: bpm) {
+                    let startTime = time + startStep
                     var time2 = time
                     var cursor2 = cursor
                     var bpm2 = bpm
                     var partner = index + 1
                     while partner < next.count, next[partner].vPosition < next[index].vPosition + next[index].length {
                         if next[partner].columnIndex == EditorColumn.bpm {
-                            time2 += (next[partner].vPosition - cursor2) / Double(bpm2)
+                            if let step = finiteQuotient(next[partner].vPosition - cursor2, bpm: bpm2) {
+                                time2 += step
+                            }
                             cursor2 = next[partner].vPosition
-                            bpm2 = next[partner].value
+                            if next[partner].value > 0 {
+                                bpm2 = next[partner].value
+                            }
                         }
                         partner += 1
                     }
-                    let endTime = time2 + (next[index].vPosition + next[index].length - cursor2) / Double(bpm2)
-                    next[index].vPosition = Double(target) * startTime
-                    next[index].length = Double(target) * endTime - next[index].vPosition
+                    if let endStep = finiteQuotient(
+                        next[index].vPosition + next[index].length - cursor2,
+                        bpm: bpm2
+                    ), startTime.isFinite {
+                        let endTime = time2 + endStep
+                        let mapped = Double(target) * startTime
+                        let length = Double(target) * endTime - mapped
+                        if mapped.isFinite, length.isFinite {
+                            next[index].vPosition = mapped
+                            next[index].length = length
+                        }
+                    }
                 }
             }
         }
@@ -152,6 +181,13 @@ enum LegacyMyO2 {
             next[0].value = target
         }
         return next
+    }
+
+    /// `bpm <= 0` 或结果非有限时不除，避免后面 `Int` 转换崩溃。
+    private static func finiteQuotient(_ numerator: Double, bpm: Int) -> Double? {
+        guard bpm > 0, numerator.isFinite else { return nil }
+        let value = numerator / Double(bpm)
+        return value.isFinite ? value : nil
     }
 
     static func gridCheck(_ notes: [MyO2Note], ntInput: Bool, gridLimit: Double) -> [MyO2Adjustment] {
@@ -278,10 +314,13 @@ enum LegacyMyO2 {
         for position in positions {
             divisor = gcd(divisor, position, limit: gridLimit)
         }
-        guard divisor < 3 else { return }
+        guard divisor.isFinite, divisor > 0, divisor < 3 else { return }
+        let gridCells = 192 / divisor
+        guard gridCells.isFinite else { return }
         var d48 = 0
         var d64 = 0
         for position in positions {
+            guard position.isFinite else { continue }
             d48 += bankersRound(abs(position - Double(bankersRound(position / 4)) * 4))
             d64 += bankersRound(abs(position - Double(bankersRound(position / 3)) * 3))
         }
@@ -290,7 +329,7 @@ enum LegacyMyO2 {
             measure: measure,
             columnIndex: column,
             columnName: titles[column] ?? "B\(max(1, column - EditorColumn.bgm + 1))",
-            grid: String(bankersRound(192 / divisor)),
+            grid: String(bankersRound(gridCells)),
             longNote: isChannelLongNote(identifier),
             hidden: isChannelHidden(identifier),
             adjTo64: d48 > d64,
@@ -309,5 +348,6 @@ private func vbBool(_ value: Bool) -> Int {
 }
 
 private func bankersRound(_ value: Double) -> Int {
-    Int(value.rounded(.toNearestOrEven))
+    guard value.isFinite else { return 0 }
+    return Int(exactly: value.rounded(.toNearestOrEven)) ?? 0
 }

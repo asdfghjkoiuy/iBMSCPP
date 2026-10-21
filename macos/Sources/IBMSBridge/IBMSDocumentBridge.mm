@@ -141,6 +141,7 @@ NSString *kindName(ibms::BmsEventKind kind) {
         case ibms::BmsEventKind::scroll: return @"scroll";
         case ibms::BmsEventKind::unknown: return @"unknown";
     }
+    return @"unknown";
 }
 
 std::optional<ibms::BeatPosition> gridFraction(
@@ -454,7 +455,10 @@ std::optional<ibms::BmsLongNotePosition> positionForBeat(
 }
 
 + (void)setIndexedTimingRadixBpm:(BOOL)bpmX1296 stop:(BOOL)stopX1296 {
-    ibms::IndexedTimingRadix::set(static_cast<bool>(bpmX1296), static_cast<bool>(stopX1296));
+    try {
+        ibms::IndexedTimingRadix::set(static_cast<bool>(bpmX1296), static_cast<bool>(stopX1296));
+    } catch (...) {
+    }
 }
 
 - (nullable instancetype)initWithData:(NSData *)data error:(NSError * _Nullable * _Nullable)error {
@@ -1227,9 +1231,27 @@ std::optional<ibms::BmsLongNotePosition> positionForBeat(
     }
     return NO;
 }
-- (BOOL)canUndo { return _document->can_undo(); }
-- (BOOL)canRedo { return _document->can_redo(); }
-- (BOOL)isDirty { return _document->dirty(); }
+- (BOOL)canUndo {
+    try {
+        return _document->can_undo();
+    } catch (...) {
+        return NO;
+    }
+}
+- (BOOL)canRedo {
+    try {
+        return _document->can_redo();
+    } catch (...) {
+        return NO;
+    }
+}
+- (BOOL)isDirty {
+    try {
+        return _document->dirty();
+    } catch (...) {
+        return NO;
+    }
+}
 - (nullable NSNumber *)conditionalStateWithError:(NSError * _Nullable * _Nullable)error {
     try {
         return @(_document->has_conditionals());
@@ -1241,8 +1263,18 @@ std::optional<ibms::BmsLongNotePosition> positionForBeat(
     }
     return nil;
 }
-- (void)markSaved { _document->mark_saved(); }
-- (void)discardHistory { _document->discard_history(); }
+- (void)markSaved {
+    try {
+        _document->mark_saved();
+    } catch (...) {
+    }
+}
+- (void)discardHistory {
+    try {
+        _document->discard_history();
+    } catch (...) {
+    }
+}
 - (BOOL)beginCompoundWithError:(NSError * _Nullable * _Nullable)error {
     try {
         _document->begin_compound();
@@ -1267,7 +1299,18 @@ std::optional<ibms::BmsLongNotePosition> positionForBeat(
     }
     return NO;
 }
-- (void)abortCompound { _document->abort_compound(); }
-- (NSUInteger)lineCount { return _document->line_count(); }
+- (void)abortCompound {
+    try {
+        _document->abort_compound();
+    } catch (...) {
+    }
+}
+- (NSUInteger)lineCount {
+    try {
+        return _document->line_count();
+    } catch (...) {
+        return 0;
+    }
+}
 
 @end

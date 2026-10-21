@@ -5,6 +5,8 @@ import UniformTypeIdentifiers
 final class OptionsSidebarView: NSScrollView, NSTextFieldDelegate, NSTextViewDelegate, NSTableViewDataSource, NSTableViewDelegate {
     var metadataFields: [String: NSTextField] = [:]
     var metadataPopups: [String: NSPopUpButton] = [:]
+    /// 提交成功后的下拉索引。失败时回到这里，不能用刚选中的新值反查。
+    private var committedPopupIndices: [String: Int] = [:]
     private var browseButtons: [String: NSButton] = [:]
     var onMetadataCommit: ((String, String) -> Bool)?
     var onMetadataDraft: ((String, String) -> Void)?
@@ -268,6 +270,7 @@ final class OptionsSidebarView: NSScrollView, NSTextFieldDelegate, NSTextViewDel
             if index >= 0, index < popup.numberOfItems {
                 popup.selectItem(at: index)
             }
+            rememberPopupIndex(popup)
             return
         }
         guard let field = metadataFields[key] else { return }
@@ -383,6 +386,7 @@ final class OptionsSidebarView: NSScrollView, NSTextFieldDelegate, NSTextViewDel
                 let popup = makePopup(items, enabled: row.enabled, key: row.key)
                 popup.frame = fieldRect
                 popup.selectItem(at: LegacyHeaderFields.popupIndex(key: row.key, stored: ""))
+                rememberPopupIndex(popup)
                 metadataPopups[row.key] = popup
                 view.part1.addSubview(popup)
             default:
@@ -405,6 +409,7 @@ final class OptionsSidebarView: NSScrollView, NSTextFieldDelegate, NSTextViewDel
                 let popup = makePopup(items, enabled: row.enabled, key: row.key)
                 popup.frame = NSRect(x: fieldRect.minX, y: y, width: 116, height: fieldRect.height)
                 popup.selectItem(at: LegacyHeaderFields.popupIndex(key: row.key, stored: ""))
+                rememberPopupIndex(popup)
                 metadataPopups[row.key] = popup
                 part2.addSubview(popup)
             case .lnobj:
@@ -413,6 +418,7 @@ final class OptionsSidebarView: NSScrollView, NSTextFieldDelegate, NSTextViewDel
                 let popup = makePopup(items, enabled: row.enabled, key: row.key)
                 popup.frame = NSRect(x: fieldRect.minX, y: y, width: 116, height: fieldRect.height)
                 popup.selectItem(at: LegacyHeaderFields.popupIndex(key: row.key, stored: ""))
+                rememberPopupIndex(popup)
                 metadataPopups[row.key] = popup
                 part2.addSubview(popup)
             case .browse:
@@ -1331,10 +1337,23 @@ final class OptionsSidebarView: NSScrollView, NSTextFieldDelegate, NSTextViewDel
 
     @objc private func popupCommitted(_ sender: NSPopUpButton) {
         guard let key = sender.identifier?.rawValue else { return }
-        let value = LegacyHeaderFields.storedValue(key: key, popupIndex: sender.indexOfSelectedItem)
-        if onMetadataCommit?(key, value) != true {
-            sender.selectItem(at: LegacyHeaderFields.popupIndex(key: key, stored: value))
+        let selected = sender.indexOfSelectedItem
+        let previous = committedPopupIndices[key]
+        let value = LegacyHeaderFields.storedValue(key: key, popupIndex: selected)
+        if onMetadataCommit?(key, value) == true {
+            committedPopupIndices[key] = selected
+            return
         }
+        if let previous, (0..<sender.numberOfItems).contains(previous) {
+            sender.selectItem(at: previous)
+        }
+    }
+
+    private func rememberPopupIndex(_ popup: NSPopUpButton) {
+        guard let key = popup.identifier?.rawValue else { return }
+        let index = popup.indexOfSelectedItem
+        guard index >= 0 else { return }
+        committedPopupIndices[key] = index
     }
 
     @objc private func browseHeaderFile(_ sender: NSButton) {

@@ -141,26 +141,62 @@ enum LegacyWaveform {
         return [Segment(vPosition: lockPosition, bpm: initial)] + later
     }
 
-    static func sampleIndex(vPosition: Double, segments: [Segment], sampleRate: Int) -> Double {
-        guard let first = segments.first, sampleRate > 0 else { return 0 }
-        var index = 0.0
-        var current = first
-        for next in segments.dropFirst() {
-            if next.vPosition > vPosition { break }
-            index += deltaSamples(
-                from: current.vPosition,
-                to: next.vPosition,
-                bpm: current.bpm,
+    /// 一次波形构建共用。`segments` 需按 `vPosition` 升序，`segments()` 的结果满足这一点。
+    struct SampleLookup {
+        private let segments: [Segment]
+        private let originSamples: [Double]
+        let sampleRate: Int
+
+        init(segments: [Segment], sampleRate: Int) {
+            self.segments = segments
+            self.sampleRate = sampleRate
+            var origins: [Double] = []
+            origins.reserveCapacity(segments.count)
+            var accumulated = 0.0
+            for index in segments.indices {
+                origins.append(accumulated)
+                let next = index + 1
+                if next < segments.count {
+                    accumulated += LegacyWaveform.deltaSamples(
+                        from: segments[index].vPosition,
+                        to: segments[next].vPosition,
+                        bpm: segments[index].bpm,
+                        sampleRate: sampleRate
+                    )
+                }
+            }
+            originSamples = origins
+        }
+
+        func sampleIndex(vPosition: Double) -> Double {
+            guard segments.first != nil, sampleRate > 0 else { return 0 }
+            let index = segmentIndex(atOrBefore: vPosition)
+            let segment = segments[index]
+            return originSamples[index] + LegacyWaveform.deltaSamples(
+                from: segment.vPosition,
+                to: vPosition,
+                bpm: segment.bpm,
                 sampleRate: sampleRate
             )
-            current = next
         }
-        return index + deltaSamples(
-            from: current.vPosition,
-            to: vPosition,
-            bpm: current.bpm,
-            sampleRate: sampleRate
-        )
+
+        private func segmentIndex(atOrBefore vPosition: Double) -> Int {
+            var low = 0
+            var high = segments.count
+            while low < high {
+                let middle = (low + high) / 2
+                if segments[middle].vPosition <= vPosition {
+                    low = middle + 1
+                } else {
+                    high = middle
+                }
+            }
+            return max(0, low - 1)
+        }
+    }
+
+    static func sampleIndex(vPosition: Double, segments: [Segment], sampleRate: Int) -> Double {
+        SampleLookup(segments: segments, sampleRate: sampleRate).sampleIndex(vPosition: vPosition)
     }
 
     static func pointX(sample: Float, width: Int, left: Int) -> Double {

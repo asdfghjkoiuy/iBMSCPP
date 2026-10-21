@@ -4,6 +4,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 #include <ibms/bms_chart.hpp>
@@ -190,6 +191,10 @@ private:
     void commit_long_note_patch(Patch patch, std::vector<BmsLongNote> expected_notes);
     void commit_normal_note_patch(Patch patch);
     void commit_patch(Patch patch);
+    void record_undo(Patch patch);
+    /// One scan of header lines. Keys are ASCII-uppercased. A later exact key
+    /// replaces an earlier one, matching `header()`. COMMENT quotes are stripped.
+    [[nodiscard]] std::unordered_map<std::string, std::string> header_index() const;
     void align_indexed_timing_labels();
 
     std::string bytes_;

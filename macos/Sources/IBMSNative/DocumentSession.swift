@@ -59,6 +59,15 @@ final class DocumentSession {
     private(set) var chartSnapshot: ChartSnapshot
     private(set) var longNoteSnapshot: LongNoteSnapshotSet
     private(set) var timingSnapshot: TimingSnapshot
+    /// 头、WAV / BMP、扩展区变化。音符增删不增加，避免每次 `update` 重读整份字节。
+    private(set) var headerRevision: UInt64 = 0
+    /// 谱面快照真正重读时增加。
+    private(set) var chartRevision: UInt64 = 0
+    private var compoundDepth = 0
+    private var needsSnapshotRefresh = false
+    private var compoundRollbackChart: ChartSnapshot?
+    private var compoundRollbackLong: LongNoteSnapshotSet?
+    private var compoundRollbackTiming: TimingSnapshot?
 
     init(data: Data, fileURL: URL? = nil) throws {
         let bridge = try IBMSDocumentBridge(data: data)
@@ -91,21 +100,47 @@ final class DocumentSession {
     }
 
     func withCompound(_ body: () throws -> Void) throws {
-        let beforeChart = chartSnapshot
-        let beforeLong = longNoteSnapshot
-        let beforeTiming = timingSnapshot
-        try bridge.beginCompound()
+        let outermost = compoundDepth == 0
+        if outermost {
+            try bridge.beginCompound()
+            compoundRollbackChart = chartSnapshot
+            compoundRollbackLong = longNoteSnapshot
+            compoundRollbackTiming = timingSnapshot
+        }
+        compoundDepth += 1
         do {
             try body()
-            try bridge.endCompound()
         } catch {
-            bridge.abortCompound()
-            // Abort restores bridge bytes; restore the already validated Swift snapshots too.
-            chartSnapshot = beforeChart
-            longNoteSnapshot = beforeLong
-            timingSnapshot = beforeTiming
+            compoundDepth -= 1
+            if outermost {
+                abortOpenCompound()
+            }
             throw error
         }
+        compoundDepth -= 1
+        if outermost {
+            do {
+                try refreshChartSnapshotIfNeeded()
+                try bridge.endCompound()
+            } catch {
+                abortOpenCompound()
+                throw error
+            }
+            compoundRollbackChart = nil
+            compoundRollbackLong = nil
+            compoundRollbackTiming = nil
+        }
+    }
+
+    private func abortOpenCompound() {
+        bridge.abortCompound()
+        if let compoundRollbackChart { chartSnapshot = compoundRollbackChart }
+        if let compoundRollbackLong { longNoteSnapshot = compoundRollbackLong }
+        if let compoundRollbackTiming { timingSnapshot = compoundRollbackTiming }
+        needsSnapshotRefresh = false
+        compoundRollbackChart = nil
+        compoundRollbackLong = nil
+        compoundRollbackTiming = nil
     }
 
     /// `TimeSelectionOps` / `MyO2`: `RedoRemoveNoteAll` then write notes, one `AddUndo`.
@@ -116,6 +151,7 @@ final class DocumentSession {
             for note in longs {
                 try eraseLongNote(note)
             }
+            try refreshChartSnapshotIfNeeded()
             let events = chartSnapshot.events.filter { $0.kind != "long_note" }
             for event in events {
                 try eraseNote(event)
@@ -190,6 +226,7 @@ final class DocumentSession {
         }
 
         try bridge.setHeaderData(data, forKey: Self.storageKey(key))
+        headerRevision &+= 1
         try refreshChartSnapshot()
         return try metadataValue(for: key)
     }
@@ -198,6 +235,7 @@ final class DocumentSession {
     func undo() throws -> Bool {
         guard canUndo else { return false }
         try bridge.undo()
+        headerRevision &+= 1
         try refreshChartSnapshot()
         return true
     }
@@ -206,6 +244,7 @@ final class DocumentSession {
     func redo() throws -> Bool {
         guard canRedo else { return false }
         try bridge.redo()
+        headerRevision &+= 1
         try refreshChartSnapshot()
         return true
     }
@@ -562,22 +601,24 @@ final class DocumentSession {
         let channel = ChartConvert.shortChannel(for: note.channel)
         let start = note.start
         let end = note.end
-        try eraseLongNote(note)
-        try insertNote(
-            measure: start.measure,
-            channel: channel,
-            fractionNumerator: start.fractionNumerator,
-            fractionDenominator: start.fractionDenominator,
-            token: start.token
-        )
-        if keepEnd {
+        try withCompound {
+            try eraseLongNote(note)
             try insertNote(
-                measure: end.measure,
+                measure: start.measure,
                 channel: channel,
-                fractionNumerator: end.fractionNumerator,
-                fractionDenominator: end.fractionDenominator,
-                token: end.token
+                fractionNumerator: start.fractionNumerator,
+                fractionDenominator: start.fractionDenominator,
+                token: start.token
             )
+            if keepEnd {
+                try insertNote(
+                    measure: end.measure,
+                    channel: channel,
+                    fractionNumerator: end.fractionNumerator,
+                    fractionDenominator: end.fractionDenominator,
+                    token: end.token
+                )
+            }
         }
     }
 
@@ -621,19 +662,21 @@ final class DocumentSession {
               let channel = ChartConvert.longChannel(for: pair.0.channel) else {
             return
         }
-        try eraseNote(pair.0)
-        try eraseNote(pair.1)
-        try insertLongNote(
-            channel: channel,
-            startMeasure: pair.0.measure,
-            startNumerator: pair.0.fractionNumerator,
-            startDenominator: pair.0.fractionDenominator,
-            endMeasure: pair.1.measure,
-            endNumerator: pair.1.fractionNumerator,
-            endDenominator: pair.1.fractionDenominator,
-            startToken: pair.0.token,
-            endToken: pair.1.token
-        )
+        try withCompound {
+            try eraseNote(pair.0)
+            try eraseNote(pair.1)
+            try insertLongNote(
+                channel: channel,
+                startMeasure: pair.0.measure,
+                startNumerator: pair.0.fractionNumerator,
+                startDenominator: pair.0.fractionDenominator,
+                endMeasure: pair.1.measure,
+                endNumerator: pair.1.fractionNumerator,
+                endDenominator: pair.1.fractionDenominator,
+                startToken: pair.0.token,
+                endToken: pair.1.token
+            )
+        }
     }
 
     func copyNote(
@@ -714,11 +757,13 @@ final class DocumentSession {
 
     func cutClipboard(events: [ChartEventSnapshot], longNotes: [LongNoteSnapshot], ntInput: Bool) throws -> String {
         let text = copyClipboard(events: events, longNotes: longNotes, ntInput: ntInput)
-        for note in longNotes {
-            try eraseLongNote(note)
-        }
-        for event in events {
-            try eraseNote(event)
+        try withCompound {
+            for note in longNotes {
+                try eraseLongNote(note)
+            }
+            for event in events {
+                try eraseNote(event)
+            }
         }
         return text
     }
@@ -732,12 +777,12 @@ final class DocumentSession {
             notes = LegacyClipboard.convertNT2BMSE(notes)
         }
         let maxVPosition = 1000 * 192.0
-        try insertConvertedNTNotes(
-            LegacyClipboard.placed(notes, baseVPosition: baseVPosition).filter {
-                $0.vPosition >= 0 && $0.vPosition < maxVPosition
-            },
-            ntInput: ntInput
-        )
+        let placed = LegacyClipboard.placed(notes, baseVPosition: baseVPosition).filter {
+            $0.vPosition >= 0 && $0.vPosition < maxVPosition
+        }
+        try withCompound {
+            try insertConvertedNTNotes(placed, ntInput: ntInput)
+        }
     }
 
     /// `TBNTInput_Click`：先收整谱，再 `ConvertBMSE2NT` / `ConvertNT2BMSE`，一笔撤销。
@@ -1027,7 +1072,7 @@ final class DocumentSession {
     ) throws {
         try withCompound {
             for item in Self.orderedSelection(events: events, longNotes: longNotes) {
-                let occupants = currentMoveOccupants()
+                let occupants = try currentMoveOccupants()
                 switch item {
                 case .short(let event):
                     let moving = LegacyMoveNotes.Occupant(
@@ -1092,7 +1137,8 @@ final class DocumentSession {
         }
     }
 
-    private func currentMoveOccupants() -> [LegacyMoveNotes.Occupant] {
+    private func currentMoveOccupants() throws -> [LegacyMoveNotes.Occupant] {
+        try refreshChartSnapshotIfNeeded()
         var occupants: [LegacyMoveNotes.Occupant] = chartSnapshot.events.map { event in
             LegacyMoveNotes.Occupant(
                 channel: event.channel,
@@ -1127,43 +1173,49 @@ final class DocumentSession {
     }
 
     func mirrorNotes(_ events: [ChartEventSnapshot]) throws {
-        for event in events {
-            guard let destination = ChartConvert.mirrorChannel(event.channel),
-                  destination != event.channel else { continue }
-            try moveNote(event, toChannel: destination)
+        try withCompound {
+            for event in events {
+                guard let destination = ChartConvert.mirrorChannel(event.channel),
+                      destination != event.channel else { continue }
+                try moveNote(event, toChannel: destination)
+            }
         }
     }
 
     func mirrorLongNotes(_ notes: [LongNoteSnapshot]) throws {
-        for note in notes {
-            guard let destination = ChartConvert.mirrorChannel(note.channel),
-                  destination != note.channel else { continue }
-            try eraseLongNote(note)
-            try insertLongNote(
-                channel: destination,
-                startMeasure: note.start.measure,
-                startNumerator: note.start.fractionNumerator,
-                startDenominator: note.start.fractionDenominator,
-                endMeasure: note.end.measure,
-                endNumerator: note.end.fractionNumerator,
-                endDenominator: note.end.fractionDenominator,
-                startToken: note.start.token,
-                endToken: note.end.token
-            )
+        try withCompound {
+            for note in notes {
+                guard let destination = ChartConvert.mirrorChannel(note.channel),
+                      destination != note.channel else { continue }
+                try eraseLongNote(note)
+                try insertLongNote(
+                    channel: destination,
+                    startMeasure: note.start.measure,
+                    startNumerator: note.start.fractionNumerator,
+                    startDenominator: note.start.fractionDenominator,
+                    endMeasure: note.end.measure,
+                    endNumerator: note.end.fractionNumerator,
+                    endDenominator: note.end.fractionDenominator,
+                    startToken: note.start.token,
+                    endToken: note.end.token
+                )
+            }
         }
     }
 
     func modifyNoteLabels(_ events: [ChartEventSnapshot], label: String) throws {
         guard let token = ChartConvert.modifyLabel(label) else { return }
-        for event in events where !ChartConvert.isNumericChannel(event.channel) {
-            try eraseNote(event)
-            try insertNote(
-                measure: event.measure,
-                channel: event.channel,
-                fractionNumerator: event.fractionNumerator,
-                fractionDenominator: event.fractionDenominator,
-                token: token
-            )
+        try withCompound {
+            for event in events where !ChartConvert.isNumericChannel(event.channel) {
+                try eraseNote(event)
+                try insertNote(
+                    measure: event.measure,
+                    channel: event.channel,
+                    fractionNumerator: event.fractionNumerator,
+                    fractionDenominator: event.fractionDenominator,
+                    token: token
+                )
+            }
         }
     }
 
@@ -1268,9 +1320,11 @@ final class DocumentSession {
             throw DocumentSessionError.unsupportedMetadataEncoding
         }
         try bridge.setHeaderData(data, forKey: LegacyWavList.headerKey(directive: directive, token: token))
+        headerRevision &+= 1
     }
 
     private func swapNoteLabels(_ first: String, _ second: String) throws {
+        try refreshChartSnapshotIfNeeded()
         let events = chartSnapshot.events.filter {
             !ChartConvert.isNumericChannel($0.channel) && ($0.token == first || $0.token == second)
         }
@@ -1374,6 +1428,7 @@ final class DocumentSession {
             throw DocumentSessionError.unsupportedMetadataEncoding
         }
         try bridge.setExpansionData(data)
+        headerRevision &+= 1
         try refreshChartSnapshot()
     }
 
@@ -1445,6 +1500,20 @@ final class DocumentSession {
     }
 
     private func refreshChartSnapshot() throws {
+        if compoundDepth > 0 {
+            needsSnapshotRefresh = true
+            return
+        }
+        try reloadChartSnapshots()
+    }
+
+    private func refreshChartSnapshotIfNeeded() throws {
+        guard needsSnapshotRefresh else { return }
+        needsSnapshotRefresh = false
+        try reloadChartSnapshots()
+    }
+
+    private func reloadChartSnapshots() throws {
         chartSnapshot = try Self.chartSnapshot(from: bridge)
         longNoteSnapshot = try Self.longNoteSnapshot(from: bridge)
         timingSnapshot = try Self.timingSnapshot(
@@ -1452,6 +1521,7 @@ final class DocumentSession {
             chartEditable: chartSnapshot.editable,
             canEditInitialBPM: !documentHasConditionals
         )
+        chartRevision &+= 1
     }
 
     private static func chartSnapshot(from bridge: IBMSDocumentBridge) throws -> ChartSnapshot {

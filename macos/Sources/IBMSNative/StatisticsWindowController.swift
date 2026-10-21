@@ -33,7 +33,11 @@ final class StatisticsWindowController: NSWindowController {
 
     func present(over parent: NSWindow, matrix: StatisticsMatrix, completion: @escaping () -> Void) {
         content.update(matrix)
-        parent.beginSheet(window!) { _ in completion() }
+        guard let sheet = window else {
+            completion()
+            return
+        }
+        parent.beginSheet(sheet) { _ in completion() }
     }
 }
 

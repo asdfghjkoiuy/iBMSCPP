@@ -6,11 +6,14 @@
 #include <cstdint>
 #include <cstdio>
 #include <iomanip>
+#include <limits>
 #include <locale>
 #include <optional>
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -172,11 +175,23 @@ std::optional<BeatPosition> parse_decimal(std::string_view raw)
         }
         const std::string whole = std::string(raw.substr(begin, dot - begin));
         const std::string frac = std::string(raw.substr(dot + 1, end - (dot + 1)));
+        // 10^18 fits in int64. Another digit overflows `denominator *= 10`.
+        constexpr std::size_t kMaxFractionDigits = 18;
+        if (frac.size() > kMaxFractionDigits)
+            return {};
         BeatPosition::rep denominator = 1;
-        for (std::size_t i = 0; i < frac.size(); ++i)
+        for (std::size_t i = 0; i < frac.size(); ++i) {
+            if (denominator > std::numeric_limits<BeatPosition::rep>::max() / 10)
+                return {};
             denominator *= 10;
-        BeatPosition::rep numerator = (whole.empty() ? 0 : std::stoll(whole)) * denominator
-            + (frac.empty() ? 0 : std::stoll(frac));
+        }
+        const BeatPosition::rep whole_value = whole.empty() ? 0 : std::stoll(whole);
+        const BeatPosition::rep frac_value = frac.empty() ? 0 : std::stoll(frac);
+        const __int128 combined = static_cast<__int128>(whole_value) * static_cast<__int128>(denominator)
+            + static_cast<__int128>(frac_value);
+        if (combined > static_cast<__int128>(std::numeric_limits<BeatPosition::rep>::max()))
+            return {};
+        BeatPosition::rep numerator = static_cast<BeatPosition::rep>(combined);
         if (negative)
             numerator = -numerator;
         return BeatPosition{numerator, denominator};
@@ -221,32 +236,81 @@ std::string to_long_channel(std::string_view channel)
 
 int measure_at(double vpos, const std::vector<BmsMeasure>& measures)
 {
-    for (int index = 1; index <= 999; ++index) {
-        if (vpos < beat_to_vpos(measures[static_cast<std::size_t>(index)].start))
-            return index - 1;
+    const int limit = static_cast<int>(std::min<std::size_t>(measures.size(), 1000));
+    if (limit <= 1)
+        return 0;
+    const auto found = std::upper_bound(
+        measures.begin() + 1, measures.begin() + limit, vpos,
+        [](double value, const BmsMeasure& measure) {
+            return value < beat_to_vpos(measure.start);
+        });
+    if (found == measures.begin() + limit)
+        return limit - 1;
+    return static_cast<int>(found - measures.begin()) - 1;
+}
+
+struct LongEndpointKey {
+    int measure = 0;
+    std::int64_t numerator = 0;
+    std::int64_t denominator = 1;
+    std::string_view channel;
+
+    bool operator==(const LongEndpointKey& other) const noexcept
+    {
+        return measure == other.measure && numerator == other.numerator && denominator == other.denominator
+            && channel == other.channel;
     }
-    return 999;
+};
+
+struct LongEndpointHash {
+    std::size_t operator()(const LongEndpointKey& key) const noexcept
+    {
+        std::size_t hash = static_cast<std::size_t>(key.measure);
+        hash ^= std::hash<std::int64_t>{}(key.numerator) + 0x9e3779b97f4a7c15ull + (hash << 6) + (hash >> 2);
+        hash ^= std::hash<std::int64_t>{}(key.denominator) + 0x9e3779b97f4a7c15ull + (hash << 6) + (hash >> 2);
+        hash ^= std::hash<std::string_view>{}(key.channel) + 0x9e3779b97f4a7c15ull + (hash << 6) + (hash >> 2);
+        return hash;
+    }
+};
+
+using HeaderIndex = std::unordered_map<std::string, std::string>;
+using LongEndpointSet = std::unordered_set<LongEndpointKey, LongEndpointHash>;
+
+LongEndpointKey endpoint_key(int measure, const BeatPosition& fraction, std::string_view channel)
+{
+    return LongEndpointKey{measure, fraction.numerator(), fraction.denominator(), channel};
 }
 
-bool same_endpoint(const BmsEvent& event, const BmsLongNoteEndpoint& end, std::string_view channel)
+LongEndpointSet long_endpoints(const BmsLongNotes& notes)
 {
-    return event.measure == end.position.measure && event.channel == channel
-        && event.fraction == end.position.fraction;
-}
-
-bool is_long_endpoint(const BmsEvent& event, const BmsLongNotes& notes)
-{
+    LongEndpointSet endpoints;
+    endpoints.reserve(notes.notes.size() * 2);
     for (const auto& note : notes.notes) {
-        if (same_endpoint(event, note.start, note.channel)
-            || same_endpoint(event, note.end, note.channel))
-            return true;
+        endpoints.insert(endpoint_key(note.start.position.measure, note.start.position.fraction, note.channel));
+        endpoints.insert(endpoint_key(note.end.position.measure, note.end.position.fraction, note.channel));
     }
-    return false;
+    return endpoints;
 }
 
-std::optional<BeatPosition> header_decimal(const BmsDocument& document, std::string_view prefix, std::string_view token)
+bool is_long_endpoint(const BmsEvent& event, const LongEndpointSet& endpoints)
 {
-    const auto value = document.header(std::string(prefix) + upper_ascii(token));
+    return endpoints.find(endpoint_key(event.measure, event.fraction, event.channel)) != endpoints.end();
+}
+
+std::optional<std::string> cached_header(const HeaderIndex& headers, std::string_view key)
+{
+    std::string normalized(key);
+    for (char& character : normalized)
+        character = upper_ascii(character);
+    const auto found = headers.find(normalized);
+    if (found == headers.end())
+        return std::nullopt;
+    return found->second;
+}
+
+std::optional<BeatPosition> header_decimal(const HeaderIndex& headers, std::string_view prefix, std::string_view token)
+{
+    const auto value = cached_header(headers, std::string(prefix) + upper_ascii(token));
     if (!value)
         return {};
     return parse_decimal(*value);
@@ -293,11 +357,11 @@ void collect_long_notes(const BmsDocument& document, bool nt_input, std::vector<
     }
 }
 
-void collect_events(const BmsDocument& document, std::vector<Cell>& cells)
+void collect_events(const BmsDocument& document, const HeaderIndex& headers, std::vector<Cell>& cells)
 {
-    const auto& notes = document.long_notes();
+    const LongEndpointSet endpoints = long_endpoints(document.long_notes());
     for (const auto& event : document.chart().events) {
-        if (is_long_endpoint(event, notes))
+        if (is_long_endpoint(event, endpoints))
             continue;
         Cell cell;
         cell.vpos = beat_to_vpos(event.beat);
@@ -309,7 +373,7 @@ void collect_events(const BmsDocument& document, std::vector<Cell>& cells)
             cell.text = hex2(parse_hex(event.token));
             break;
         case BmsEventKind::extended_bpm:
-            if (const auto value = header_decimal(document, "BPM", event.token)) {
+            if (const auto value = header_decimal(headers, "BPM", event.token)) {
                 cell.allocate = true;
                 cell.scaled = scaled_value(*value);
             } else {
@@ -317,7 +381,7 @@ void collect_events(const BmsDocument& document, std::vector<Cell>& cells)
             }
             break;
         case BmsEventKind::stop:
-            if (const auto value = header_decimal(document, "STOP", event.token)) {
+            if (const auto value = header_decimal(headers, "STOP", event.token)) {
                 cell.allocate = true;
                 cell.scaled = scaled_value(*value);
             } else {
@@ -325,7 +389,7 @@ void collect_events(const BmsDocument& document, std::vector<Cell>& cells)
             }
             break;
         case BmsEventKind::scroll:
-            if (const auto value = header_decimal(document, "SCROLL", event.token)) {
+            if (const auto value = header_decimal(headers, "SCROLL", event.token)) {
                 cell.allocate = true;
                 cell.scaled = scaled_value(*value);
             } else {
@@ -389,21 +453,22 @@ std::string encode_column(
     return row;
 }
 
-std::string generate_header_meta(const BmsDocument& document)
+std::string generate_header_meta(const BmsDocument& document, const HeaderIndex& headers)
 {
-    const std::string player = document.header("PLAYER").value_or("1");
-    const std::string genre = document.header("GENRE").value_or("");
-    const std::string title = document.header("TITLE").value_or("");
-    const std::string artist = document.header("ARTIST").value_or("");
+    const std::string player = cached_header(headers, "PLAYER").value_or("1");
+    const std::string genre = cached_header(headers, "GENRE").value_or("");
+    const std::string title = cached_header(headers, "TITLE").value_or("");
+    const std::string artist = cached_header(headers, "ARTIST").value_or("");
     BeatPosition bpm{120};
     if (document.timing().available)
         bpm = document.timing().initial_bpm;
-    else if (const auto header = document.header("BPM")) {
+    else if (const auto header = cached_header(headers, "BPM")) {
         if (const auto parsed = parse_decimal(*header))
             bpm = *parsed;
     }
-    const std::string play_level = document.header("PLAYLEVEL").value_or("");
-    const int rank = document.header("RANK") ? parse_int(*document.header("RANK"), 3) : 3;
+    const std::string play_level = cached_header(headers, "PLAYLEVEL").value_or("");
+    const auto rank_header = cached_header(headers, "RANK");
+    const int rank = rank_header ? parse_int(*rank_header, 3) : 3;
     std::string out = crlf() + "*---------------------- HEADER FIELD" + crlf() + crlf();
     out += "#PLAYER " + std::string(player.empty() ? "1" : player) + crlf();
     out += "#GENRE " + genre + crlf();
@@ -414,7 +479,7 @@ std::string generate_header_meta(const BmsDocument& document)
     out += "#RANK " + std::to_string(rank) + crlf();
     out += crlf();
     const auto append_optional = [&](std::string_view key, std::string_view directive) {
-        if (const auto value = document.header(key); value && !value->empty())
+        if (const auto value = cached_header(headers, key); value && !value->empty())
             out += "#" + std::string(directive) + " " + *value + crlf();
     };
     append_optional("SUBTITLE", "SUBTITLE");
@@ -423,16 +488,16 @@ std::string generate_header_meta(const BmsDocument& document)
     append_optional("BANNER", "BANNER");
     append_optional("BACKBMP", "BACKBMP");
     out += crlf();
-    if (const auto difficulty = document.header("DIFFICULTY")) {
+    if (const auto difficulty = cached_header(headers, "DIFFICULTY")) {
         const int index = parse_int(*difficulty, 0);
         if (index != 0)
             out += "#DIFFICULTY " + std::to_string(index) + crlf();
     }
     append_optional("DEFEXRANK", "DEFEXRANK");
     append_optional("TOTAL", "TOTAL");
-    if (const auto comment = document.header("COMMENT"); comment && !comment->empty())
+    if (const auto comment = cached_header(headers, "COMMENT"); comment && !comment->empty())
         out += "#COMMENT \"" + *comment + "\"" + crlf();
-    if (const auto lnobj = document.header("LNOBJ"); lnobj && !lnobj->empty())
+    if (const auto lnobj = cached_header(headers, "LNOBJ"); lnobj && !lnobj->empty())
         out += "#LNOBJ " + *lnobj + crlf();
     else
         out += "#LNTYPE 1" + crlf();
@@ -441,16 +506,16 @@ std::string generate_header_meta(const BmsDocument& document)
 }
 
 std::string generate_header_indexed(
-    const BmsDocument& document, const std::vector<std::int64_t>& bpm, const std::vector<std::int64_t>& stop,
+    const HeaderIndex& headers, const std::vector<std::int64_t>& bpm, const std::vector<std::int64_t>& stop,
     const std::vector<std::int64_t>& scroll)
 {
     std::string out;
     for (int index = 1; index <= 1295; ++index) {
-        if (const auto name = document.header(std::string("WAV") + c10to36(index)); name && !name->empty())
+        if (const auto name = cached_header(headers, std::string("WAV") + c10to36(index)); name && !name->empty())
             out += "#WAV" + c10to36(index) + " " + *name + crlf();
     }
     for (int index = 1; index <= 1295; ++index) {
-        if (const auto name = document.header(std::string("BMP") + c10to36(index)); name && !name->empty())
+        if (const auto name = cached_header(headers, std::string("BMP") + c10to36(index)); name && !name->empty())
             out += "#BMP" + c10to36(index) + " " + *name + crlf();
     }
     const bool bpm1296 = IndexedTimingRadix::bpm_x1296();
@@ -478,10 +543,13 @@ BmsSaveReport BmsDocument::save_bms_report(bool nt_input, double grid_limit) con
 {
     if (has_conditionals_)
         return {serialize(), false, 0, 0, 0};
+    if (!(grid_limit > 0.0) || !std::isfinite(grid_limit))
+        grid_limit = 1e-3;
 
+    const HeaderIndex headers = header_index();
     std::vector<Cell> cells;
     collect_long_notes(*this, nt_input, cells);
-    collect_events(*this, cells);
+    collect_events(*this, headers, cells);
     std::stable_sort(cells.begin(), cells.end(), [](const Cell& left, const Cell& right) {
         return left.vpos < right.vpos;
     });
@@ -562,7 +630,7 @@ BmsSaveReport BmsDocument::save_bms_report(bool nt_input, double grid_limit) con
     main += crlf();
 
     BmsSaveReport report;
-    report.text = generate_header_meta(*this) + generate_header_indexed(*this, bpm_table, stop_table, scroll_table)
+    report.text = generate_header_meta(*this, headers) + generate_header_indexed(headers, bpm_table, stop_table, scroll_table)
         + crlf() + expansion + crlf() + main;
     report.overlapping = overlapping;
     report.bpm_count = bpm_table.size() - 1;

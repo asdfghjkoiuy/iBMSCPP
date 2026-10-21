@@ -64,6 +64,13 @@ void expect_throws(Operation&& operation, std::string_view expression)
     return json.find(needle) != std::string_view::npos;
 }
 
+[[nodiscard]] bool json_has_number(std::string_view json, std::string_view key, std::string_view value)
+{
+    const std::string pretty = "\"" + std::string(key) + "\": " + std::string(value);
+    const std::string compact = "\"" + std::string(key) + "\":" + std::string(value);
+    return json.find(pretty) != std::string_view::npos || json.find(compact) != std::string_view::npos;
+}
+
 void empty_document_uses_bmsone_defaults()
 {
     const auto document = ibms::BmsonDocument::empty();
@@ -85,7 +92,15 @@ void empty_document_uses_bmsone_defaults()
     expect(document.stop_notes().empty(), "empty stopNotes");
     expect(document.sound_channels().empty(), "empty soundChannels");
 
-    const auto again = ibms::BmsonDocument::from_json(document.to_json());
+    const std::string json = document.to_json();
+    expect(json_has_key(json, "sound_channels"), "empty write uses sound_channels");
+    expect(json_has_key(json, "init_bpm"), "empty write uses init_bpm");
+    expect(json_has_number(json, "init_bpm", "120"), "empty write init_bpm is 120");
+    expect(!json_has_key(json, "soundChannels"), "empty write has no soundChannels");
+    expect(!json_has_key(json, "initBPM"), "empty write has no initBPM");
+    expect(document.version() == "1.0.0", "empty version stays 1.0.0");
+
+    const auto again = ibms::BmsonDocument::from_json(json);
     expect(again.info().mode_hint == "beat-7k", "empty JSON keeps modeHint");
     expect(again.info().resolution == 240, "empty JSON keeps resolution");
     expect_near(again.info().init_bpm, 120.0, "empty JSON keeps initBPM");
@@ -110,7 +125,15 @@ void minimal_json_roundtrip()
     expect(original.sound_channels()[0].notes[0].l == 0, "short note length");
     expect(!original.sound_channels()[0].notes[0].c, "short note is not continue");
 
-    const auto roundtrip = ibms::BmsonDocument::from_json(original.to_json());
+    const std::string written = original.to_json();
+    expect(json_has_key(written, "sound_channels"), "camelCase fixture rewrite uses sound_channels");
+    expect(json_has_key(written, "init_bpm"), "camelCase fixture rewrite uses init_bpm");
+    expect(json_has_key(written, "bpm_events"), "camelCase fixture rewrite uses bpm_events");
+    expect(!json_has_key(written, "soundChannels"), "camelCase fixture rewrite drops soundChannels");
+    expect(!json_has_key(written, "initBPM"), "camelCase fixture rewrite drops initBPM");
+    expect(!json_has_key(written, "bpmNotes"), "camelCase fixture rewrite drops bpmNotes");
+
+    const auto roundtrip = ibms::BmsonDocument::from_json(written);
     expect(roundtrip.info().title == "Demo", "roundtrip title");
     expect_near(roundtrip.info().init_bpm, 140.0, "roundtrip initBPM");
     expect(roundtrip.lines().size() == 1 && roundtrip.lines()[0].y == 240, "roundtrip line pulse");
@@ -513,6 +536,200 @@ void illegal_json_does_not_crash()
         [] { (void)ibms::BmsonDocument::from_json("[]"); }, "root array");
 }
 
+[[nodiscard]] std::size_t total_sound_notes(const ibms::BmsonDocument& document)
+{
+    std::size_t count = 0;
+    for (const auto& channel : document.sound_channels()) {
+        count += channel.notes.size();
+    }
+    return count;
+}
+
+void expect_bmsone10_write_without_camelcase_aliases(std::string_view json, std::string_view expression)
+{
+    expect(json_has_key(json, "sound_channels"), expression);
+    expect(json_has_key(json, "init_bpm"), expression);
+    expect(json_has_key(json, "mode_hint"), expression);
+    expect(json_has_key(json, "chart_name"), expression);
+    expect(json_has_key(json, "judge_rank"), expression);
+    expect(json_has_key(json, "bpm_events"), expression);
+    expect(json_has_key(json, "stop_events"), expression);
+    expect(!json_has_key(json, "soundChannels"), expression);
+    expect(!json_has_key(json, "initBPM"), expression);
+    expect(!json_has_key(json, "modeHint"), expression);
+    expect(!json_has_key(json, "chartName"), expression);
+    expect(!json_has_key(json, "judgeRank"), expression);
+    expect(!json_has_key(json, "bpmNotes"), expression);
+    expect(!json_has_key(json, "stopNotes"), expression);
+}
+
+void expect_init_bpm_not_zero(std::string_view json, std::string_view expression)
+{
+    expect(json_has_key(json, "init_bpm"), expression);
+    expect(!json_has_number(json, "init_bpm", "0"), expression);
+}
+
+void bmsone_snake_case_reads_channels_and_init_bpm()
+{
+    const auto document = ibms::BmsonDocument::from_json(load_fixture("bmsone-snake-case.bmson"));
+    expect(document.sound_channels().size() == 1, "BmsONE snake_case has one channel");
+    expect(total_sound_notes(document) == 2, "BmsONE snake_case has two notes");
+    if (document.sound_channels().size() == 1 && document.sound_channels()[0].notes.size() == 2) {
+        expect(document.sound_channels()[0].name == "kick.wav", "BmsONE snake_case wav");
+        expect(document.sound_channels()[0].notes[0].x == 1 && document.sound_channels()[0].notes[0].l == 0,
+               "first note is short");
+        expect(document.sound_channels()[0].notes[1].x == 2 && document.sound_channels()[0].notes[1].l == 240,
+               "second note is long");
+    }
+    expect_near(document.info().init_bpm, 140.0, "init_bpm is 140, not default 120");
+    expect(document.info().chart_name == "Hyper", "chart_name");
+    expect_near(document.info().judge_rank, 80.0, "judge_rank");
+    expect(document.info().mode_hint == "beat-7k", "mode_hint");
+    expect(document.info().level == 2, "level");
+    expect(document.bpm_notes().size() == 1, "one bpm_event");
+    if (document.bpm_notes().size() == 1) {
+        expect(document.bpm_notes()[0].y == 240, "bpm_events pulse");
+        expect_near(document.bpm_notes()[0].v, 160.0, "bpm_events uses bpm, not v");
+    }
+    expect(document.stop_notes().size() == 1, "one stop_event");
+    if (document.stop_notes().size() == 1) {
+        expect(document.stop_notes()[0].y == 480, "stop_events pulse");
+        expect_near(document.stop_notes()[0].v, 120.0, "stop_events uses duration, not v");
+    }
+
+    const std::string json = document.to_json();
+    expect_bmsone10_write_without_camelcase_aliases(json, "snake_case rewrite stays BmsONE 1.0");
+    expect(json_has_key(json, "bpm_events"), "writes bpm_events");
+    expect(json_has_key(json, "stop_events"), "writes stop_events");
+    expect(json_has_key(json, "bpm"), "BPM field is bpm, not v");
+    expect(json_has_key(json, "duration"), "stop field is duration, not v");
+    expect(!json_has_key(json, "v"), "timing rewrite does not keep v");
+    expect_init_bpm_not_zero(json, "snake_case rewrite init_bpm is not 0");
+    expect(json_has_number(json, "init_bpm", "140"), "snake_case rewrite init_bpm is 140");
+
+    const auto again = ibms::BmsonDocument::from_json(json);
+    expect(again.sound_channels().size() == 1 && total_sound_notes(again) == 2, "roundtrip keeps notes");
+    expect_near(again.info().init_bpm, 140.0, "roundtrip initBPM");
+    expect(again.info().chart_name == "Hyper", "roundtrip chartName");
+    expect_near(again.info().judge_rank, 80.0, "roundtrip judgeRank");
+    expect(again.bpm_notes().size() == 1 && again.bpm_notes()[0].y == 240, "roundtrip bpmNotes");
+    expect_near(again.bpm_notes()[0].v, 160.0, "roundtrip bpm value");
+    expect(again.stop_notes().size() == 1 && again.stop_notes()[0].y == 480, "roundtrip stopNotes");
+    expect_near(again.stop_notes()[0].v, 120.0, "roundtrip stop duration");
+    expect_bmsone10_write_without_camelcase_aliases(again.to_json(), "second write stays BmsONE 1.0");
+}
+
+void empty_camelcase_channels_yield_to_populated_snake_case()
+{
+    const auto document = ibms::BmsonDocument::from_json(
+        R"({"info":{"initBPM":120,"init_bpm":140},"soundChannels":[],"sound_channels":[)"
+        R"({"name":"tone.wav","notes":[{"x":1,"y":0,"l":0,"c":false},{"x":2,"y":240,"l":240,"c":false}]}]})");
+    expect(document.sound_channels().size() == 1, "empty soundChannels does not hide sound_channels");
+    expect(total_sound_notes(document) == 2, "notes come from sound_channels");
+    if (document.sound_channels().size() == 1 && document.sound_channels()[0].notes.size() == 2) {
+        expect(document.sound_channels()[0].name == "tone.wav", "snake_case channel name");
+        expect(document.sound_channels()[0].notes[1].l == 240, "long note from sound_channels");
+    }
+    expect_near(document.info().init_bpm, 120.0, "initBPM wins over init_bpm when both exist");
+    const std::string json = document.to_json();
+    expect_bmsone10_write_without_camelcase_aliases(json, "dual-key save writes BmsONE 1.0 keys");
+    expect(json_has_key(json, "sound_channels"), "writes populated sound_channels");
+    expect(!json_has_key(json, "soundChannels"), "does not keep empty soundChannels extra");
+    expect_init_bpm_not_zero(json, "dual-key rewrite init_bpm is not 0");
+    const auto again = ibms::BmsonDocument::from_json(json);
+    expect(again.sound_channels().size() == 1 && total_sound_notes(again) == 2, "rewritten notes stay");
+}
+
+void conflicting_aliases_keep_camelcase_and_snake_only_notes()
+{
+    const auto document = ibms::BmsonDocument::from_json(
+        R"({"soundChannels":[{"name":"kick.wav","notes":[{"x":1,"y":0,"l":0,"c":false}]}],)"
+        R"("sound_channels":[{"name":"kick.wav","notes":[{"x":1,"y":0,"l":99,"c":true},)"
+        R"({"x":2,"y":240,"l":240,"c":false}]},{"name":"snare.wav","notes":[{"x":3,"y":480,"l":0,"c":false}]}]})");
+    expect(document.sound_channels().size() == 2, "snake-only channel is kept");
+    if (document.sound_channels().size() >= 1) {
+        expect(document.sound_channels()[0].name == "kick.wav", "first channel stays camelCase name");
+        expect(document.sound_channels()[0].notes.size() == 2, "camelCase channel gains snake-only note");
+        if (document.sound_channels()[0].notes.size() >= 1) {
+            expect(document.sound_channels()[0].notes[0].l == 0 && !document.sound_channels()[0].notes[0].c,
+                   "same pulse prefers camelCase");
+        }
+        if (document.sound_channels()[0].notes.size() >= 2) {
+            expect(document.sound_channels()[0].notes[1].x == 2 && document.sound_channels()[0].notes[1].l == 240,
+                   "snake-only note on same channel is kept");
+        }
+    }
+    if (document.sound_channels().size() >= 2) {
+        expect(document.sound_channels()[1].name == "snare.wav", "snake-only channel name");
+        expect(document.sound_channels()[1].notes.size() == 1 && document.sound_channels()[1].notes[0].x == 3,
+               "snake-only channel note");
+    }
+}
+
+void snake_case_timing_merges_without_overwriting_camelcase()
+{
+    const auto document = ibms::BmsonDocument::from_json(
+        R"({"bpmNotes":[{"y":0,"v":140}],"bpm_events":[{"y":0,"bpm":200},{"y":240,"bpm":160}],)"
+        R"("stopNotes":[{"y":120,"v":60}],"stop_events":[{"y":120,"duration":999},{"y":480,"duration":90}]})");
+    expect(document.bpm_notes().size() == 2, "bpm alias adds only the missing pulse");
+    if (document.bpm_notes().size() >= 1) {
+        expect(document.bpm_notes()[0].y == 0, "first BPM pulse");
+        expect_near(document.bpm_notes()[0].v, 140.0, "same pulse prefers bpmNotes.v");
+    }
+    if (document.bpm_notes().size() >= 2) {
+        expect(document.bpm_notes()[1].y == 240, "snake-only BPM pulse");
+        expect_near(document.bpm_notes()[1].v, 160.0, "bpm_events.bpm");
+    }
+    expect(document.stop_notes().size() == 2, "stop alias adds only the missing pulse");
+    if (document.stop_notes().size() >= 1) {
+        expect_near(document.stop_notes()[0].v, 60.0, "same pulse prefers stopNotes.v");
+    }
+    if (document.stop_notes().size() >= 2) {
+        expect(document.stop_notes()[1].y == 480, "snake-only stop pulse");
+        expect_near(document.stop_notes()[1].v, 90.0, "stop_events.duration");
+    }
+    const std::string json = document.to_json();
+    expect(json_has_key(json, "bpm_events"), "timing rewrite uses bpm_events");
+    expect(json_has_key(json, "stop_events"), "timing rewrite uses stop_events");
+    expect(json_has_key(json, "duration"), "timing rewrite uses duration");
+    expect(!json_has_key(json, "bpmNotes"), "timing rewrite drops bpmNotes");
+    expect(!json_has_key(json, "stopNotes"), "timing rewrite drops stopNotes");
+    expect(!json_has_key(json, "v"), "timing rewrite does not keep v");
+}
+
+void writeback_uses_bmsone10_keys_from_either_alias()
+{
+    const auto camel = ibms::BmsonDocument::from_json(
+        R"({"version":"1.0.0","info":{"title":"Camel","initBPM":140},"soundChannels":[)"
+        R"({"name":"kick.wav","notes":[{"x":1,"y":0,"l":0,"c":false}]}]})");
+    expect_near(camel.info().init_bpm, 140.0, "camelCase initBPM reads as 140");
+    expect(camel.sound_channels().size() == 1 && total_sound_notes(camel) == 1, "camelCase channel");
+    const std::string camel_json = camel.to_json();
+    expect_bmsone10_write_without_camelcase_aliases(camel_json, "camelCase rewrite uses BmsONE 1.0");
+    expect_init_bpm_not_zero(camel_json, "camelCase rewrite init_bpm is not 0");
+    expect(json_has_number(camel_json, "init_bpm", "140"), "camelCase rewrite init_bpm is 140");
+    expect(!json_has_key(camel_json, "soundChannels"), "camelCase rewrite has no soundChannels extra");
+
+    const auto from_camel = ibms::BmsonDocument::from_json(camel_json);
+    expect(from_camel.version() == "1.0.0", "camelCase rewrite keeps version 1.0.0");
+    expect_near(from_camel.info().init_bpm, 140.0, "native rereads camelCase rewrite");
+    expect(from_camel.sound_channels().size() == 1 && total_sound_notes(from_camel) == 1,
+           "native rereads camelCase notes");
+
+    const auto snake = ibms::BmsonDocument::from_json(load_fixture("bmsone-snake-case.bmson"));
+    const std::string snake_json = snake.to_json();
+    expect_bmsone10_write_without_camelcase_aliases(snake_json, "snake_case rewrite uses BmsONE 1.0");
+    expect_init_bpm_not_zero(snake_json, "snake_case rewrite init_bpm is not 0");
+    expect(json_has_number(snake_json, "init_bpm", "140"), "snake_case rewrite init_bpm is 140");
+    expect(!json_has_key(snake_json, "soundChannels"), "snake_case rewrite has no soundChannels extra");
+
+    const auto from_snake = ibms::BmsonDocument::from_json(snake_json);
+    expect(from_snake.version() == "1.0.0", "snake_case rewrite keeps version 1.0.0");
+    expect_near(from_snake.info().init_bpm, 140.0, "native rereads snake_case rewrite");
+    expect(from_snake.sound_channels().size() == 1 && total_sound_notes(from_snake) == 2,
+           "native rereads snake_case notes");
+}
+
 }  // namespace
 
 int main()
@@ -544,6 +761,11 @@ int main()
         bga_reads_021_keys_and_keeps_extras();
         convert_resolution_scales_bga();
         illegal_json_does_not_crash();
+        bmsone_snake_case_reads_channels_and_init_bpm();
+        empty_camelcase_channels_yield_to_populated_snake_case();
+        conflicting_aliases_keep_camelcase_and_snake_only_notes();
+        snake_case_timing_merges_without_overwriting_camelcase();
+        writeback_uses_bmsone10_keys_from_either_alias();
     } catch (const std::exception& exception) {
         std::cerr << "Unhandled exception: " << exception.what() << '\n';
         return 1;

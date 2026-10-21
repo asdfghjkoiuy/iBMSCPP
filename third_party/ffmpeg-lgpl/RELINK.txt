@@ -1,0 +1,23 @@
+# 重新链接 FFmpeg 7.1.1 LGPL 静态库
+
+本轮没有做应用发布。要满足 LGPL 对对应源码和重新链接的要求，按下面的步骤用同一份源码包重新生成四份静态库，再链进预览解码器。
+
+1. 取得对应源码。文件名 ffmpeg-7.1.1.tar.xz，地址
+   https://ffmpeg.org/releases/ffmpeg-7.1.1.tar.xz
+   SHA-256 必须是
+   733984395e0dbbe5c046abda2dc49a5544e7e0e1e2366bba849222ae9e3a03b1
+   构建脚本默认从 /tmp/ibms-ffmpeg-src 读取这份已下载的包，不会改去下载别的版本。
+2. 许可证全文使用源码包中的 COPYING.LGPLv2.1。仓库里的同名文件应与它一致。
+3. 在仓库根目录执行：
+
+   third_party/ffmpeg-lgpl/build-static.sh <prefix> <cc> <arch> <min-macos>
+
+   例：build-static.sh /tmp/ibms-ffmpeg-prefix /usr/bin/cc arm64 14.0
+
+   脚本只打开 ASF 解复用和 wmv1、wmv2、wmv3、vc1 四个视频解码器，不打开音频解码器。
+   aarch64 保留汇编并要求 NEON。产物是 prefix/lib 下的
+   libavutil.a、libavcodec.a、libavformat.a、libswscale.a。
+4. 预览桥 IBMSPreviewVideo 静态链接这四份库。替换库之后需要重新链接
+   IBMSPreviewVideo，以及链了它的测试或应用。不要改去链接 /opt/homebrew 的动态库。
+5. prefix 里还应有 COPYING.LGPLv2.1、SOURCE-SHA256.txt 和本说明。
+   只有 LICENSE.txt 这种短声明，不能当作已经完成发布。

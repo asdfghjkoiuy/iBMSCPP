@@ -29,7 +29,11 @@ final class ColorPickerWindowController: NSWindowController {
     func present(over parent: NSWindow, color: ThemeColor, completion: @escaping (ThemeColor?) -> Void) {
         pendingResult = nil
         content.load(color)
-        parent.beginSheet(window!) { [weak self] _ in
+        guard let sheet = window else {
+            completion(nil)
+            return
+        }
+        parent.beginSheet(sheet) { [weak self] _ in
             completion(self?.pendingResult)
         }
     }

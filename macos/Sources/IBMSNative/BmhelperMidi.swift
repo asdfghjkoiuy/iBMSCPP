@@ -123,15 +123,18 @@ enum BmhelperMidi {
         var timed: [TimedWriteEvent] = []
         timed.reserveCapacity(notes.count * 2)
         for note in notes {
+            let position = max(note.position, 0)
+            let gate = max(note.gate, 0)
+            let offTime = position > Int.max - gate ? Int.max : position + gate
             timed.append(
                 TimedWriteEvent(
-                    time: note.position,
+                    time: position,
                     event: .noteOn(channel: 0, nn: note.noteNum, velocity: note.velocity)
                 )
             )
             timed.append(
                 TimedWriteEvent(
-                    time: note.position + note.gate,
+                    time: offTime,
                     event: .noteOff(channel: 0, nn: note.noteNum)
                 )
             )
@@ -167,8 +170,9 @@ enum BmhelperMidi {
         var lastTime = 0
         var status: UInt8 = 0
         for item in timed {
-            appendVarInt(&bytes, item.time - lastTime)
-            lastTime = item.time
+            let delta = max(0, item.time - lastTime)
+            appendVarInt(&bytes, delta)
+            lastTime += delta
             switch item.event {
             case .noteOn(let channel, let nn, let velocity):
                 let next = UInt8(0x90 | (channel & 0x0F))
@@ -212,7 +216,7 @@ enum BmhelperMidi {
     /// 对照 `SmfWriteVarInt`：低 7 位先拆，再倒序写出，最高位续行。
     private static func appendVarInt(_ dest: inout [UInt8], _ value: Int) {
         var chunks: [UInt8] = []
-        var remaining = value & 0x0FFF_FFFF
+        var remaining = max(value, 0) & 0x0FFF_FFFF
         chunks.append(UInt8(remaining & 0x7F))
         remaining >>= 7
         while remaining != 0 {
@@ -726,14 +730,20 @@ private struct ByteCursor {
         return slice
     }
 
-    /// 对照 `SmfReadVarInt`：最多收到约 28 位。
+    /// 对照 `SmfReadVarInt`：最多 4 字节、约 28 位。更长的 VLQ 先读完续行字节再报错。
     mutating func varint() throws -> Int {
         var value = 0
-        var byte: UInt8
-        repeat {
-            byte = try u8()
+        for _ in 0..<4 {
+            let byte = try u8()
             value = (value << 7) | Int(byte & 0x7F)
-        } while (byte & 0x80) != 0 && (value & 0x0FE0_0000) == 0
-        return value
+            if byte & 0x80 == 0 {
+                return value
+            }
+        }
+        var extra = try u8()
+        while extra & 0x80 != 0 {
+            extra = try u8()
+        }
+        throw BmhelperMidiError.truncated
     }
 }

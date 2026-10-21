@@ -15,7 +15,9 @@ public:
     explicit BmsonParseError(const std::string& message);
 };
 
-/// BmsONE / BMSON 1.0.0 chart info. JSON keys are camelCase (modeHint, initBPM).
+/// BmsONE / BMSON 1.0.0 chart info. `to_json()` writes BmsONE 1.0 snake_case
+/// (`mode_hint`, `init_bpm`, `chart_name`, `judge_rank`). `from_json()` also
+/// reads camelCase (`modeHint`, `initBPM`, `chartName`, `judgeRank`).
 ///
 /// This is not BMS metadata: there is no measure index, no `#xxx11:` channel
 /// row, and no conditional branch.
@@ -39,13 +41,15 @@ struct BmsonBarLine {
     std::int64_t y = 0;
 };
 
-/// Tempo change. JSON object is `{ "y", "v" }` (BmsONE), not a BMS `#BPM` line.
+/// Tempo change. `to_json()` writes `{ "y", "bpm" }` (BmsONE 1.0).
+/// `from_json()` also reads `{ "y", "v" }`. This is not a BMS `#BPM` line.
 struct BmsonBpmNote {
     std::int64_t y = 0;
     double v = 0.0;
 };
 
-/// Stop. JSON object is `{ "y", "v" }`; `v` is duration in pulses.
+/// Stop. `to_json()` writes `{ "y", "duration" }`; `from_json()` also reads
+/// `{ "y", "v" }`. The value is duration in pulses.
 struct BmsonStopNote {
     std::int64_t y = 0;
     double v = 0.0;
@@ -86,17 +90,24 @@ enum class BmsonBgaLane {
 
 /// BMSON document for BmsONE. Independent of `BmsDocument` / `BmsChart`.
 ///
-/// JSON root (missing fields use BmsONE defaults):
-/// `version`, `info{ title, subtitle, artist, subartists, genre, modeHint,
-/// chartName, level, initBPM, judgeRank, total, resolution }`,
-/// `lines[{ y }]`, `bpmNotes[{ y, v }]`, `stopNotes[{ y, v }]`,
-/// `soundChannels[{ name, notes[{ x, y, l, c }] }]`,
+/// JSON root (missing fields use BmsONE defaults). `to_json()` writes
+/// BmsONE 1.0 snake_case:
+/// `version`, `info{ title, subtitle, artist, subartists, genre, mode_hint,
+/// chart_name, level, init_bpm, judge_rank, total, resolution }`,
+/// `lines[{ y }]`, `bpm_events[{ y, bpm }]`, `stop_events[{ y, duration }]`,
+/// `sound_channels[{ name, notes[{ x, y, l, c }] }]`,
 /// `bga{ bga_header[{ id, name }], bga_events[{ y, id }],
 /// layer_events[{ y, id }], poor_events[{ y, id }] }`.
 ///
-/// `bga` also accepts BmsONE 0.21 keys `bgaHeader` / `bgaNotes` /
-/// `layerNotes` / `poorNotes` and `ID`. `to_json()` writes the 1.0 keys.
-/// Empty BGA (no headers, events, or extras) is omitted.
+/// `from_json()` also accepts camelCase (`modeHint`, `chartName`, `initBPM`,
+/// `judgeRank`, `bpmNotes`/`v`, `stopNotes`/`v`, `soundChannels`) and
+/// BmsONE 0.21 BGA keys `bgaHeader` / `bgaNotes` / `layerNotes` /
+/// `poorNotes` and `ID`. An empty camelCase array does not hide a populated
+/// snake_case alias. If both sides have notes, camelCase wins on the same
+/// pulse; notes that only appear under the alias are kept.
+/// `to_json()` does not emit camelCase copies (`soundChannels`, `initBPM`,
+/// `bpmNotes`, `stopNotes`) as extras. Empty BGA (no headers, events, or
+/// extras) is omitted.
 ///
 /// Unknown object keys on the root, `info`, `bga`, and the listed array
 /// items are kept and written back by `to_json()`. This model does not
@@ -155,7 +166,7 @@ public:
     [[nodiscard]] std::string info_extra_string(std::string_view key) const;
 
     /// Write a string extra. Empty `value` removes the key. First-class info
-    /// keys (`title`, `modeHint`, …) are refused.
+    /// keys (`title`, `mode_hint`, `modeHint`, …) are refused.
     void set_info_extra_string(std::string key, std::string value);
 
     /// Unknown `info` extras as a JSON object. Official image keys

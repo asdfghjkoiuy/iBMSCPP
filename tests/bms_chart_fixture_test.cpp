@@ -351,16 +351,30 @@ void huge_ratio_is_read_only_diagnostic_and_lossless() {
     expect(!threw && chart != nullptr, "huge ratio produces a chart snapshot");
     if (chart != nullptr) {
         expect(!chart->editable, "huge ratio makes the chart read-only");
+        expect(chart->measures.empty() && chart->events.empty(),
+               "INT64_MAX measure ratio clears the derived timeline instead of keeping a partial chart");
         expect(!chart->diagnostics.empty(), "huge ratio produces a chart diagnostic");
         bool mentions_overflow = false;
         for (const auto& diagnostic : chart->diagnostics) {
             mentions_overflow = mentions_overflow
-                || diagnostic.message.find("overflow") != std::string::npos
-                || diagnostic.message.find("representable") != std::string::npos;
+                || diagnostic.message.find("measure ratio exceeds the representable beat range") != std::string::npos;
         }
-        expect(mentions_overflow, "huge ratio diagnostic identifies representable-range overflow");
+        expect(mentions_overflow,
+               "9223372036854775807 is accepted as an int64 decimal, then rejected when beats overflow");
     }
     expect(document.serialize() == source, "huge ratio preserves raw bytes after chart inspection");
+
+    const std::string too_large = "#TITLE Too large\n#00002:9223372036854775808\n";
+    auto rejected = BmsDocument::from_bytes(too_large);
+    const auto& rejected_chart = rejected.chart();
+    expect(!rejected_chart.editable, "one past INT64_MAX keeps the chart read-only");
+    bool mentions_invalid = false;
+    for (const auto& diagnostic : rejected_chart.diagnostics) {
+        mentions_invalid = mentions_invalid
+            || diagnostic.message.find("invalid measure ratio") != std::string::npos;
+    }
+    expect(mentions_invalid, "9223372036854775808 is rejected as an unrepresentable decimal");
+    expect(rejected.serialize() == too_large, "unrepresentable decimal preserves raw bytes");
 }
 
 }  // namespace

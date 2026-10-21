@@ -28,7 +28,11 @@ final class ImportSMWindowController: NSWindowController {
     func present(over parent: NSWindow, difficulties: [String], completion: @escaping (Int?) -> Void) {
         pendingIndex = nil
         content.load(difficulties)
-        parent.beginSheet(window!) { [weak self] _ in
+        guard let sheet = window else {
+            completion(nil)
+            return
+        }
+        parent.beginSheet(sheet) { [weak self] _ in
             completion(self?.pendingIndex)
         }
     }

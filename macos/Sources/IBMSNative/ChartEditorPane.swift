@@ -162,7 +162,10 @@ final class BmsonSequenceFooterView: NSView {
         didSet { needsDisplay = true }
     }
     var contentOffsetX: CGFloat = 0 {
-        didSet { needsDisplay = true }
+        didSet {
+            guard contentOffsetX != oldValue else { return }
+            needsDisplay = true
+        }
     }
     var footerHeight: CGFloat = 0 {
         didSet { needsDisplay = true }
@@ -181,6 +184,21 @@ final class BmsonSequenceFooterView: NSView {
     private var draggingGrip = false
     private var dragStartHeight = 0
     private var dragStartWindowY: CGFloat = 0
+    private let nameFont = NSFont.systemFont(ofSize: CGFloat(BmsONEFooter.fontSize))
+    private let playingFont = NSFont.systemFont(ofSize: 10)
+    private let centeredStyle: NSParagraphStyle = {
+        let style = NSMutableParagraphStyle()
+        style.alignment = .center
+        return style
+    }()
+    private var truncatedNames: [NameCacheKey: String] = [:]
+
+    private struct NameCacheKey: Hashable {
+        var name: String
+        var width: Int
+        var height: Int
+        var mode: BmsONEFooter.TextMode
+    }
 
     override var isFlipped: Bool { true }
 
@@ -313,13 +331,10 @@ final class BmsonSequenceFooterView: NSView {
         let height = max(Int(frame.height.rounded(.towardZero)), 0)
         let mode = BmsONEFooter.textMode(internalWidth: width, height: height)
         let textRect = BmsONEFooter.textRect(internalWidth: width, height: height, mode: mode)
-        let font = NSFont.systemFont(ofSize: CGFloat(BmsONEFooter.fontSize))
-        let shown = BmsONEFooter.displayedName(name: name, textRect: textRect) { text in
-            measure(text, font: font, wrap: mode != .verticalSingle, width: textRect.width)
-        }
+        let shown = truncatedName(name, width: width, height: height, mode: mode, textRect: textRect)
         guard let shown else { return }
         let attrs: [NSAttributedString.Key: Any] = [
-            .font: font,
+            .font: nameFont,
             .foregroundColor: NSColor.black
         ]
         let local = CGRect(
@@ -362,17 +377,29 @@ final class BmsonSequenceFooterView: NSView {
         color.setFill()
         box.fill()
         let attrs: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 10),
+            .font: playingFont,
             .foregroundColor: NSColor.white,
-            .paragraphStyle: centered
+            .paragraphStyle: centeredStyle
         ]
         (label as NSString).draw(in: box, withAttributes: attrs)
     }
 
-    private var centered: NSParagraphStyle {
-        let style = NSMutableParagraphStyle()
-        style.alignment = .center
-        return style
+    private func truncatedName(
+        _ name: String,
+        width: Int,
+        height: Int,
+        mode: BmsONEFooter.TextMode,
+        textRect: CGRect
+    ) -> String? {
+        let key = NameCacheKey(name: name, width: width, height: height, mode: mode)
+        if let cached = truncatedNames[key] { return cached }
+        let shown = BmsONEFooter.displayedName(name: name, textRect: textRect) { text in
+            measure(text, font: nameFont, wrap: mode != .verticalSingle, width: textRect.width)
+        }
+        if let shown {
+            truncatedNames[key] = shown
+        }
+        return shown
     }
 
     private func measure(_ text: String, font: NSFont, wrap: Bool, width: CGFloat) -> CGSize {

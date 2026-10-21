@@ -26,6 +26,9 @@ enum BmsONEMasterExportError: Error, Equatable, Sendable {
 }
 
 enum BmsONEMasterExport {
+    /// 解码后的交错 PCM。导出时按文件缓存，避免同一素材解多次。
+    typealias StereoWave = BmsONEExportWave
+
     static let sampleRate = BmsONEDialogLayout.exportSampleRate
     static let sliderSteps = BmsONEDialogLayout.exportGainSteps
 
@@ -155,6 +158,9 @@ enum BmsONEMasterExport {
         shouldCancel: @escaping @Sendable () -> Bool = { false }
     ) throws -> String {
         let rendered = render(samples: samples, slider: slider, clip: clip)
+        guard rendered.data.count >= 44 else {
+            throw BmsONEMasterExportError.cannotOpenFile
+        }
         try writeWithoutOverwriting(rendered.data, to: url, shouldCancel: shouldCancel)
         return rendered.log + "\n" + BmsONEDialogLayout.exportComplete
     }
@@ -308,7 +314,7 @@ enum BmsONEMasterExport {
                 peakOrgR: peakOrgR
             )
         }
-        return (writeWav(pcm), log)
+        return (writeWav(pcm) ?? Data(), log)
     }
 
     static func readPcm16(_ data: Data) -> BmsONEExportWave? {
@@ -323,15 +329,20 @@ enum BmsONEMasterExport {
         var channels = 0
         var bits = 0
         var pcm = false
-        while offset + 8 <= data.count {
+        while true {
+            let (headerEnd, headerOverflow) = offset.addingReportingOverflow(8)
+            if headerOverflow || headerEnd > data.count { break }
             let id = ascii(data, offset, 4)
             let size = Int(readUInt32(data, offset + 4))
-            let body = offset + 8
-            if id == "fmt ", size >= 16, body + 16 <= data.count {
-                pcm = readUInt16(data, body) == 1
-                channels = Int(readUInt16(data, body + 2))
-                sampleRate = Int(readUInt32(data, body + 4))
-                bits = Int(readUInt16(data, body + 14))
+            let body = headerEnd
+            if id == "fmt ", size >= 16 {
+                let (fmtEnd, fmtOverflow) = body.addingReportingOverflow(16)
+                if !fmtOverflow, fmtEnd <= data.count {
+                    pcm = readUInt16(data, body) == 1
+                    channels = Int(readUInt16(data, body + 2))
+                    sampleRate = Int(readUInt32(data, body + 4))
+                    bits = Int(readUInt16(data, body + 14))
+                }
             } else if id == "data" {
                 guard pcm, bits == 16, channels > 0, sampleRate > 0 else { return nil }
                 let byteCount = min(size, data.count - body)
@@ -345,7 +356,11 @@ enum BmsONEMasterExport {
                 }
                 return BmsONEExportWave(sampleRate: sampleRate, channels: channels, samples: samples)
             }
-            offset = body + size + (size % 2)
+            let (chunkEnd, chunkOverflow) = body.addingReportingOverflow(size)
+            if chunkOverflow { return nil }
+            let (next, padOverflow) = chunkEnd.addingReportingOverflow(size % 2)
+            if padOverflow || next <= offset { return nil }
+            offset = next
         }
         return nil
     }
@@ -437,7 +452,7 @@ enum BmsONEMasterExport {
                 "--------",
                 "Original",
                 dbPair("  Peak: ", Double(peakOrgL), Double(peakOrgR)),
-                dbPair("  RMS: ", Double(rmsL) / gainWithNorm, Double(rmsR) / gain),
+                dbPair("  RMS: ", Double(rmsL) / gainWithNorm, Double(rmsR) / gainWithNorm),
                 "--------",
                 String(format: "After volume gain %.2fdB", db),
                 dbPair("  Peak: ", Double(peakOrgL) * gain, Double(peakOrgR) * gain),
@@ -471,9 +486,12 @@ enum BmsONEMasterExport {
         String(format: "%@%.2fdB, %.2fdB", prefix, 20 * log10(max(left, 1e-12)), 20 * log10(max(right, 1e-12)))
     }
 
-    private static func writeWav(_ samples: [Int16]) -> Data {
+    private static func writeWav(_ samples: [Int16]) -> Data? {
+        let maxDataBytes = Int(UInt32.max) - 36
+        guard samples.count <= maxDataBytes / 2 else { return nil }
         let dataSize = samples.count * 2
         var data = Data()
+        data.reserveCapacity(44 + dataSize)
         data.append(contentsOf: Array("RIFF".utf8))
         appendUInt32(&data, UInt32(36 + dataSize))
         data.append(contentsOf: Array("WAVE".utf8))
@@ -487,10 +505,7 @@ enum BmsONEMasterExport {
         appendUInt16(&data, 16)
         data.append(contentsOf: Array("data".utf8))
         appendUInt32(&data, UInt32(dataSize))
-        for sample in samples {
-            var value = sample.littleEndian
-            withUnsafeBytes(of: &value) { data.append(contentsOf: $0) }
-        }
+        samples.withUnsafeBytes { data.append(contentsOf: $0) }
         return data
     }
 

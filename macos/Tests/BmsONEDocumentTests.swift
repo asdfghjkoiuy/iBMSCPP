@@ -640,7 +640,7 @@ struct BmsONEDocumentTests {
         require(document.info.chartName == "Hyper", "chartName")
         require(abs(document.judgeRank - 80) < 1e-9, "judgeRank 80")
         require(document.modeHint == "beat-5k", "modeHint written")
-        require((try! document.jsonString()).contains("\"chartName\": \"Hyper\""), "chartName in JSON")
+        require((try! document.jsonString()).contains("\"chart_name\": \"Hyper\""), "chart_name in JSON")
         require(document.undo() && document.undo() && document.undo(), "undo info fields")
         require(document.info.chartName.isEmpty, "chartName restored")
         require(document.modeHint != "beat-5k" || document.info.modeHint == "beat-7k", "modeHint restored")

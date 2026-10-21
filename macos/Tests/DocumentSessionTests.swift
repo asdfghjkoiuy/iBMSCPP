@@ -66,6 +66,7 @@ struct DocumentSessionTests {
         try testBGMColumnsAndHiddenConvert()
         try testMirrorAndModifyLabels()
         try testMoveToColumnAndBGM()
+        try testDigitTwoColumnMoveIsOneUndo()
         try testFindReplaceExactFractionsAndScroll()
         try testLongNoteSessionPipeline()
         try testTimingSnapshotUsesCoreExactValues()
@@ -382,6 +383,58 @@ struct DocumentSessionTests {
         require(try bgm.undo(), "MoveToBGM is one undo")
         require(bgm.chartSnapshot.events.contains { $0.channel == "11" } && bgm.chartSnapshot.events.contains { $0.channel == "12" },
                 "undo restores both key notes")
+    }
+
+    /// 数字键 2 的显示列是 `11`。框选本身在谱面探测里；这里只验证同一批音符进 `moveNotes` 后是一笔撤销。
+    /// 夹具的音分别来自 12 和 13，拍和标签保持原值，每一颗都实际改到 11。
+    @MainActor
+    private static func testDigitTwoColumnMoveIsOneUndo() throws {
+        let session = try DocumentSession(data: Data("#00012:01\n#00113:02\n#00212:03\n".utf8))
+        guard let fromTwelve = session.chartSnapshot.events.first(where: { $0.token == "01" }),
+              let fromThirteen = session.chartSnapshot.events.first(where: { $0.token == "02" }),
+              let alsoTwelve = session.chartSnapshot.events.first(where: { $0.token == "03" }) else {
+            throw TestFailure("digit 2 fixture is missing notes on 12 and 13")
+        }
+        let sources = [fromTwelve, fromThirteen, alsoTwelve]
+        func kept(_ event: ChartEventSnapshot, channel: String) -> Bool {
+            session.chartSnapshot.events.contains {
+                $0.channel == channel
+                    && $0.token == event.token
+                    && $0.measure == event.measure
+                    && $0.beat == event.beat
+                    && $0.fractionNumerator == event.fractionNumerator
+                    && $0.fractionDenominator == event.fractionDenominator
+            }
+        }
+        require(!session.canUndo
+                    && fromTwelve.channel == "12" && fromTwelve.measure == 0 && fromTwelve.token == "01"
+                    && fromTwelve.fractionNumerator == 0 && fromTwelve.fractionDenominator == 1 && fromTwelve.beat == 0
+                    && fromThirteen.channel == "13" && fromThirteen.measure == 1 && fromThirteen.token == "02"
+                    && fromThirteen.fractionNumerator == 0 && fromThirteen.fractionDenominator == 1 && fromThirteen.beat == 4
+                    && alsoTwelve.channel == "12" && alsoTwelve.measure == 2 && alsoTwelve.token == "03"
+                    && alsoTwelve.fractionNumerator == 0 && alsoTwelve.fractionDenominator == 1 && alsoTwelve.beat == 8
+                    && Set(sources.map(\.channel)) == Set(["12", "13"])
+                    && sources.allSatisfy { $0.channel != "11" },
+                "digit 2 fixture was not beats and labels from channels 12 and 13")
+        require(LegacyMoveNotes.playableDisplay(forDigit: 2) == "11", "digit 2 is not column 11")
+        try session.moveNotes(toDisplay: "11", events: sources, longNotes: [], shiftFirstOnly: false)
+        require(session.chartSnapshot.events.count == 3
+                    && session.chartSnapshot.events.filter { $0.channel == "11" }.count == 3
+                    && !session.chartSnapshot.events.contains { $0.channel == "12" || $0.channel == "13" }
+                    && sources.allSatisfy { kept($0, channel: "11") },
+                "digit 2 left a note off column 11 or changed its beat or label")
+        require(session.canUndo && !session.canRedo, "digit 2 move did not open one undo step")
+        require(try session.undo() && !session.canUndo && session.canRedo, "digit 2 move was not one undo")
+        require(session.chartSnapshot.events.count == 3
+                    && !session.chartSnapshot.events.contains { $0.channel == "11" }
+                    && sources.allSatisfy { kept($0, channel: $0.channel) },
+                "one undo did not restore every note from 12 and 13")
+        require(try session.redo() && session.canUndo && !session.canRedo, "digit 2 redo was not the same single step")
+        require(session.chartSnapshot.events.count == 3
+                    && session.chartSnapshot.events.filter { $0.channel == "11" }.count == 3
+                    && !session.chartSnapshot.events.contains { $0.channel == "12" || $0.channel == "13" }
+                    && sources.allSatisfy { kept($0, channel: "11") },
+                "redo did not put every note back on column 11")
     }
 
     @MainActor

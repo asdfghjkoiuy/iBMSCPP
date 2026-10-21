@@ -14,12 +14,11 @@ struct BmhelperWindowLayoutSnapshot {
 @MainActor
 final class BmhelperWindowController: NSWindowController, NSWindowDelegate {
     private let helperMenu: NSMenu
-    private var restoredAppMenu: NSMenu?
     private let defDialog = BmhelperDefDialogWindowController()
     private let defTranspose = BmhelperDefTransposeWindowController()
     private let midiImport = BmhelperMidiImportWindowController()
     private let divisionSettings = BmhelperDivisionSettingWindowController()
-    private let audioSplitter = AudioSlicerWindowController()
+    private let audioSplitter: AudioSlicerWindowController
     private var lastDefinitionName = BmhelperDefDialogLayout.defaultName
     private var lastNotes: [MidiNoteEvent] = []
     private var lastQuantize = 480
@@ -36,7 +35,8 @@ final class BmhelperWindowController: NSWindowController, NSWindowDelegate {
     private var selectedIndex: Int?
     private var hasProject = false
 
-    init() {
+    init(audioSplitter: AudioSlicerWindowController = AudioSlicerWindowController()) {
+        self.audioSplitter = audioSplitter
         helperMenu = BmhelperMenuBar.make()
         let size = BmhelperMainLayout.clientSize
         let window = NSWindow(
@@ -159,18 +159,6 @@ final class BmhelperWindowController: NSWindowController, NSWindowDelegate {
         } else {
             complete(alert.runModal())
         }
-    }
-
-    func windowDidBecomeKey(_ notification: Notification) {
-        guard NSApp.mainMenu !== helperMenu else { return }
-        restoredAppMenu = NSApp.mainMenu
-        NSApp.mainMenu = helperMenu
-    }
-
-    func windowDidResignKey(_ notification: Notification) {
-        guard NSApp.mainMenu === helperMenu, let restoredAppMenu else { return }
-        NSApp.mainMenu = restoredAppMenu
-        self.restoredAppMenu = nil
     }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
@@ -611,7 +599,7 @@ final class BmhelperWindowController: NSWindowController, NSWindowDelegate {
             let titled = self.projectIsTitled
             var saveAsSucceeded = false
             if answer == .yes && !titled {
-                saveAsSucceeded = self.performSaveAs()
+                saveAsSucceeded = self.saveUntitledBeforeClose()
             }
             let decision = BmhelperClose.decide(
                 hasProject: true,
@@ -629,9 +617,12 @@ final class BmhelperWindowController: NSWindowController, NSWindowDelegate {
                 self.applyClosedProject()
                 proceed(true)
             case .saveThenClose:
-                self.saveTitledIgnoringResult()
-                self.applyClosedProject()
-                proceed(true)
+                if self.saveTitledIgnoringResult() {
+                    self.applyClosedProject()
+                    proceed(true)
+                } else {
+                    proceed(false)
+                }
             case .saveAsThenClose:
                 self.applyClosedProject()
                 proceed(true)
@@ -652,10 +643,22 @@ final class BmhelperWindowController: NSWindowController, NSWindowDelegate {
         refreshDivisionList()
     }
 
-    /// 已命名 + Yes：对照源码，不检查 `Save()` 成败，仍关工程。
-    private func saveTitledIgnoringResult() {
-        guard let projectURL else { return }
-        try? writeProject(to: projectURL)
+    /// 已命名 + Yes。写盘失败返回 false，调用方不得清空工程。
+    @discardableResult
+    private func saveTitledIgnoringResult() -> Bool {
+        guard let projectURL else { return false }
+        do {
+            try writeProject(to: projectURL)
+            return true
+        } catch {
+            presentOpenError(url: projectURL)
+            return false
+        }
+    }
+
+    /// 未命名 + Yes。取消或写盘失败都返回 false，不得清空工程。
+    private func saveUntitledBeforeClose() -> Bool {
+        performSaveAs()
     }
 
     private func presentClosePrompt(then finish: @escaping (BmhelperClose.Answer) -> Void) {
@@ -686,9 +689,7 @@ final class BmhelperWindowController: NSWindowController, NSWindowDelegate {
     }
 
     private func markProjectChangedIfTitled() {
-        if projectIsTitled {
-            projectChanged = true
-        }
+        projectChanged = true
     }
 
     private func selectListedDivision(_ index: Int) {
@@ -837,7 +838,7 @@ final class BmhelperWindowController: NSWindowController, NSWindowDelegate {
     }
 
     /// 只改选中项的 `definitions[].zz`。`div` / 音符 / `src2def` 不动。
-    /// 已命名则变脏。定义窗若已打开则刷新。
+    /// 改过就变脏，未命名也记脏。定义窗若已打开则刷新。
     private func applyTranspose(_ kind: BmhelperTranspose.Kind) {
         guard let index = selectedIndex, storedDivisions.indices.contains(index) else { return }
         let next = BmhelperTranspose.apply(

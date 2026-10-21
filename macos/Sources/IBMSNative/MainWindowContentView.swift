@@ -12,6 +12,17 @@ final class MainWindowContentView: NSView {
     private let statusStrip = StatusStripView()
     private let timeStrip = TimeSelectionStripView()
     private var pendingMetadata: [String: String] = [:]
+    private var hoverCacheDirty = true
+    /// 弱引用：文档释放后地址可能被下一份谱复用，不能拿 ObjectIdentifier 当缓存键。
+    private weak var cachedResourceDocument: DocumentSession?
+    private var cachedResourceHeaderRevision: UInt64 = 0
+    private var cachedWavTable: [String: String] = [:]
+    private var cachedBmpTable: [String: String] = [:]
+    private var cachedExpansion = ""
+    private var hoverBpmNotes: [LegacyStatus.TimingNote] = [LegacyStatus.headerBPMNote(120)]
+    private var hoverStopNotes: [LegacyStatus.TimingNote] = []
+    private var hoverMeasureBottoms: [Double] = []
+    private var cachedBmsonNotes: [(x: Int64, y: Int64, l: Int64)] = []
     private let panes: [ChartEditorPane] = [
         ChartEditorPane(index: 0, fillsWidth: false),
         ChartEditorPane(index: 1, fillsWidth: true),
@@ -214,6 +225,7 @@ final class MainWindowContentView: NSView {
         viewMode: BmsONEViewMode = BmsONEViewMode.resolve("")
     ) {
         if applies {
+            hoverCacheDirty = true
             bmsonStatus = BmsONEStatusContext(
                 resolution: max(resolution, 1),
                 bars: bars,
@@ -231,6 +243,7 @@ final class MainWindowContentView: NSView {
 
     func pushBmsonViewMode(_ mode: BmsONEViewMode?) {
         bmsonViewMode = mode
+        hoverCacheDirty = true
     }
 
     func pushBmsonSoundLaneMode(_ mode: BmsONESoundChannelLaneMode?) {
@@ -593,7 +606,8 @@ final class MainWindowContentView: NSView {
         exportIBMSC: @escaping () -> Void,
         showMyO2: @escaping () -> Void,
         hidePreview: @escaping () -> Void,
-        refresh: @escaping () -> Void
+        refresh: @escaping () -> Void,
+        withCompound: ((_ body: () throws -> Void) throws -> Void)? = nil
     ) {
         actions.isBusy = isBusy
         actions.newDocument = newDocument
@@ -631,6 +645,7 @@ final class MainWindowContentView: NSView {
         actions.showMyO2 = showMyO2
         actions.hidePreview = hidePreview
         actions.refresh = refresh
+        actions.withCompound = withCompound
     }
 
     func bindBmsonPulseWrites(
@@ -1063,6 +1078,10 @@ final class MainWindowContentView: NSView {
     func commitActiveMetadataEditor() -> Bool {
         forEachSurface { $0.cancelDrag() }
         let pending = pendingMetadata
+        guard !pending.isEmpty else {
+            window?.makeFirstResponder(nil)
+            return true
+        }
         for key in DocumentSession.editableKeys {
             guard let value = pending[key] else { continue }
             guard actions.commitMetadata(key: key, value: value) else {
@@ -1175,6 +1194,27 @@ final class MainWindowContentView: NSView {
         statusStrip.isHidden = !showSlot || timeOn
     }
 
+    private func cachedBmsResources(
+        _ document: DocumentSession
+    ) -> (wavTable: [String: String], bmpTable: [String: String], expansion: String) {
+        if cachedResourceDocument === document, cachedResourceHeaderRevision == document.headerRevision {
+            return (cachedWavTable, cachedBmpTable, cachedExpansion)
+        }
+        let data = (try? document.currentBytes()) ?? Data()
+        let wavTable = LegacyPreviewAudio.parseWavTable(from: data)
+        let bmpTable = LegacyWavList.parseTable(
+            from: LegacyPreviewAudio.decodeBMSText(data),
+            directive: "BMP"
+        )
+        let expansion = (try? document.expansionText()) ?? ""
+        cachedResourceDocument = document
+        cachedResourceHeaderRevision = document.headerRevision
+        cachedWavTable = wavTable
+        cachedBmpTable = bmpTable
+        cachedExpansion = expansion
+        return (wavTable, bmpTable, expansion)
+    }
+
     func update(
         document: DocumentSession?,
         chartSource: MainEditorChartSource? = nil,
@@ -1233,18 +1273,18 @@ final class MainWindowContentView: NSView {
             optionsSidebar.setBmpTable(bmpTable)
             optionsSidebar.setBeatFromChart(chartSource.chart.measures)
             optionsSidebar.setExpansionText("", enabled: false)
-        } else if let data = try? document?.currentBytes() {
-            wavTable = LegacyPreviewAudio.parseWavTable(from: data)
-            bmpTable = LegacyWavList.parseTable(
-                from: LegacyPreviewAudio.decodeBMSText(data), directive: "BMP"
-            )
+        } else if let document {
+            let resources = cachedBmsResources(document)
+            wavTable = resources.wavTable
+            bmpTable = resources.bmpTable
             optionsSidebar.setWavTable(wavTable)
             optionsSidebar.setBmpTable(bmpTable)
-            optionsSidebar.setBeatFromChart(document?.chartSnapshot.measures ?? [])
-            optionsSidebar.setExpansionText((try? document?.expansionText()) ?? "", enabled: document != nil)
+            optionsSidebar.setBeatFromChart(document.chartSnapshot.measures)
+            optionsSidebar.setExpansionText(resources.expansion, enabled: true)
         } else {
             wavTable = [:]
             bmpTable = [:]
+            cachedResourceDocument = nil
             optionsSidebar.setWavTable([:])
             optionsSidebar.setBmpTable([:])
             optionsSidebar.setBeatFromChart([])
@@ -1634,14 +1674,8 @@ final class MainWindowContentView: NSView {
         if writeTool, !surface.statusHasColumn {
             return
         }
+        ensureHoverCaches()
         let divide = Double(optionsSidebar.selectedDivision)
-        let header = [LegacyStatus.headerBPMNote(surface.headerBPM)]
-        let chartBPM = surface.bpmEvents
-            .filter { $0.vPosition > 0 }
-            .map { LegacyStatus.TimingNote(vPosition: $0.vPosition, value: $0.value * 10_000) }
-        let stops = surface.stopEvents.map {
-            LegacyStatus.TimingNote(vPosition: $0.vPosition, value: $0.value * 10_000)
-        }
         let flags = NSEvent.modifierFlags
         let fields: LegacyStatus.Fields
         if writeTool {
@@ -1658,8 +1692,8 @@ final class MainWindowContentView: NSView {
                 shift: flags.contains(.shift),
                 control: flags.contains(.control),
                 divide: divide,
-                bpmNotes: header + chartBPM,
-                stopNotes: stops,
+                bpmNotes: hoverBpmNotes,
+                stopNotes: hoverStopNotes,
                 labels: statusLabels
             )
         } else {
@@ -1688,8 +1722,8 @@ final class MainWindowContentView: NSView {
                 divide: divide,
                 hover: hover,
                 ntInput: surface.ntInputEnabled,
-                bpmNotes: header + chartBPM,
-                stopNotes: stops,
+                bpmNotes: hoverBpmNotes,
+                stopNotes: hoverStopNotes,
                 labels: statusLabels
             )
         }
@@ -1697,9 +1731,8 @@ final class MainWindowContentView: NSView {
     }
 
     private func statusMeasure(for vPosition: Double) -> (index: Int, mod: Double, length: Double) {
-        let bottoms = LegacyTimeSelection.measureBottoms(
-            measures: chartSurface.chartLayout.snapshot.measures.map { (start: $0.start, length: $0.length) }
-        )
+        ensureHoverCaches()
+        let bottoms = hoverMeasureBottoms
         let index = LegacyTimeSelection.measureAtDisplacement(vPosition, bottoms: bottoms)
         let bottom = (0..<bottoms.count).contains(index) ? bottoms[index] : Double(index) * 192
         let next = index + 1
@@ -1724,6 +1757,7 @@ final class MainWindowContentView: NSView {
     }
 
     private func applyBmsonHoverStatus() {
+        ensureHoverCaches()
         guard let context = bmsonStatus else { return }
         guard let cursor = chartSurface.bmsonCursor else {
             statusStrip.setField("FSP4", text: "")
@@ -1796,7 +1830,7 @@ final class MainWindowContentView: NSView {
             hitLength: cursor.hitLength,
             inMeasureArea: cursor.inMeasureArea,
             viewMode: context.viewMode,
-            notes: bmsonNoteRefs(context: context),
+            notes: cachedBmsonNotes,
             explicitBars: Set(context.explicitBars),
             allBars: Set(context.bars),
             initBpm: context.initBpm,
@@ -1805,7 +1839,30 @@ final class MainWindowContentView: NSView {
         statusStrip.setField("FST", text: hint.isEmpty ? idleStatusLength : hint)
     }
 
+    private func ensureHoverCaches() {
+        guard hoverCacheDirty else { return }
+        hoverCacheDirty = false
+        let measures = chartSurface.chartLayout.snapshot.measures
+        hoverMeasureBottoms = LegacyTimeSelection.measureBottoms(
+            measures: measures.map { (start: $0.start, length: $0.length) }
+        )
+        var bpm = chartSurface.bpmEvents
+            .filter { $0.vPosition > 0 }
+            .map { LegacyStatus.TimingNote(vPosition: $0.vPosition, value: $0.value * 10_000) }
+        bpm.sort { $0.vPosition < $1.vPosition }
+        hoverBpmNotes = [LegacyStatus.headerBPMNote(chartSurface.headerBPM)] + bpm
+        hoverStopNotes = chartSurface.stopEvents
+            .map { LegacyStatus.TimingNote(vPosition: $0.vPosition, value: $0.value * 10_000) }
+            .sorted { $0.vPosition < $1.vPosition }
+        cachedBmsonNotes = bmsonNoteRefs()
+    }
+
     /// 共用谱面上的音换成 BMSON 的 `x` / `y` / `l`，给叠层和盖住判定用。
+    private func bmsonNoteRefs() -> [(x: Int64, y: Int64, l: Int64)] {
+        guard let context = bmsonStatus else { return [] }
+        return bmsonNoteRefs(context: context)
+    }
+
     private func bmsonNoteRefs(context: BmsONEStatusContext) -> [(x: Int64, y: Int64, l: Int64)] {
         let resolution = context.resolution
         let mode = context.viewMode
@@ -2017,11 +2074,17 @@ final class MainWindowContentView: NSView {
 
     private func convertSelectedShortNotesToLong() {
         let events = Array(chartSurface.selectedChartItems().events)
-        for pair in ChartConvert.longNotePairs(from: events) {
-            guard actions.convertShortNotesToLong?(pair.0, pair.1) == true else { return }
-        }
-        for leftover in ChartConvert.unpairedLongNotes(from: events) {
-            guard actions.convertShortNoteToLongEndpoint?(leftover) == true else { return }
+        performChartBatch {
+            for pair in ChartConvert.longNotePairs(from: events) {
+                guard self.actions.convertShortNotesToLong?(pair.0, pair.1) == true else {
+                    throw ChartBatchError()
+                }
+            }
+            for leftover in ChartConvert.unpairedLongNotes(from: events) {
+                guard self.actions.convertShortNoteToLongEndpoint?(leftover) == true else {
+                    throw ChartBatchError()
+                }
+            }
         }
     }
 
@@ -2032,14 +2095,21 @@ final class MainWindowContentView: NSView {
             ($0.start.measure, $0.channel, $0.start.fractionNumerator, $0.start.fractionDenominator)
                 < ($1.start.measure, $1.channel, $1.start.fractionNumerator, $1.start.fractionDenominator)
         }
-        for note in notes {
-            guard actions.convertLongNoteToShort?(note, keepEnd) == true else { return }
-        }
-        for leftover in ChartConvert.unpairedLongEndpoints(
+        let leftovers = ChartConvert.unpairedLongEndpoints(
             from: Array(items.events),
             longs: chartSurface.currentLongNotes.notes
-        ) {
-            guard actions.convertLongEndpointToShort?(leftover) == true else { return }
+        )
+        performChartBatch {
+            for note in notes {
+                guard self.actions.convertLongNoteToShort?(note, keepEnd) == true else {
+                    throw ChartBatchError()
+                }
+            }
+            for leftover in leftovers {
+                guard self.actions.convertLongEndpointToShort?(leftover) == true else {
+                    throw ChartBatchError()
+                }
+            }
         }
     }
 
@@ -2135,9 +2205,26 @@ final class MainWindowContentView: NSView {
             ($0.measure, $0.channel, $0.fractionNumerator, $0.fractionDenominator)
                 < ($1.measure, $1.channel, $1.fractionNumerator, $1.fractionDenominator)
         }
-        for event in events {
-            guard let destination = ChartConvert.destinationChannel(for: event.channel, action: action) else { continue }
-            guard actions.convertNote?(event, destination) == true else { return }
+        performChartBatch {
+            for event in events {
+                guard let destination = ChartConvert.destinationChannel(for: event.channel, action: action) else { continue }
+                guard self.actions.convertNote?(event, destination) == true else {
+                    throw ChartBatchError()
+                }
+            }
+        }
+    }
+
+    private func performChartBatch(_ body: () throws -> Void) {
+        do {
+            if let withCompound = actions.withCompound {
+                try withCompound(body)
+            } else {
+                try body()
+            }
+            actions.refresh?()
+        } catch {
+            actions.refresh?()
         }
     }
 
@@ -2278,6 +2365,8 @@ final class MainWindowContentView: NSView {
                 playSkinColors: playSkinColors
             )
         }
+        hoverCacheDirty = true
+        ensureHoverCaches()
     }
 
     private func refreshBmsonFooter(visible: Bool? = nil) {
@@ -2838,7 +2927,9 @@ final class MainWindowContentView: NSView {
         return token.utf8.allSatisfy { ($0 >= 48 && $0 <= 57) || ($0 >= 65 && $0 <= 90) } && token != "00"
     }
 
-    private func makeDivider() -> NSView {
+    private struct ChartBatchError: Error {}
+
+private func makeDivider() -> NSView {
         let divider = NSView()
         divider.translatesAutoresizingMaskIntoConstraints = false
         divider.wantsLayer = true
@@ -2865,6 +2956,7 @@ final class EditorActionTarget: NSObject {
     var selectEncoding: ((MetadataEncoding) -> Bool)?
     var setInitialBPM: ((String) -> Bool)?
     var refresh: (() -> Void)?
+    var withCompound: ((_ body: () throws -> Void) throws -> Void)?
     weak var chartSurface: ChartSurfaceView?
     var writeNote: ((String, Int, Int, Int, String, Bool) -> Bool)?
     var writeNoteAtPulse: ((String, Int64, String, Bool) -> Bool)?

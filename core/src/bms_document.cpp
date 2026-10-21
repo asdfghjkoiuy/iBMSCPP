@@ -275,9 +275,10 @@ EditTarget parse_edit_target(std::string_view raw)
         for (std::size_t i = 1; i < upper.size(); ++i) {
             if (upper[i] < '0' || upper[i] > '9')
                 throw std::invalid_argument("BGM column must be B1 through B999");
-            if (lane_index > (999 - (upper[i] - '0')) / 10)
+            const int digit = upper[i] - '0';
+            if (lane_index > (999 - digit) / 10)
                 throw std::invalid_argument("BGM column must be B1 through B999");
-            lane_index = lane_index * 10 + (upper[i] - '0');
+            lane_index = lane_index * 10 + digit;
         }
         if (lane_index < 1)
             throw std::invalid_argument("BGM column must be B1 through B999");
@@ -329,7 +330,7 @@ std::optional<Row> parse_channel_row(std::string_view b, Line l, std::string* pr
             *problem = "malformed supported channel row: payload must contain complete two-byte tokens";
         return {};
     }
-    return Row{int((b[p + 1] - '0') * 100 + (b[p + 2] - '0') * 10 + b[p + 3] - '0'), c, p + 7, payload / 2, l.number};
+    return Row{int((b[p + 1] - '0') * 100 + (b[p + 2] - '0') * 10 + (b[p + 3] - '0')), c, p + 7, payload / 2, l.number};
 }
 
 std::optional<BeatPosition> ratio(std::string_view x, bool allow_zero = false, bool allow_negative = false)
@@ -356,10 +357,11 @@ std::optional<BeatPosition> ratio(std::string_view x, bool allow_zero = false, b
         }
         if (c < '0' || c > '9')
             return {};
+        const int digit = c - '0';
         seen = true;
-        if (n > (std::numeric_limits<std::int64_t>::max() - (c - '0')) / 10)
+        if (n > (std::numeric_limits<std::int64_t>::max() - digit) / 10)
             return {};
-        n = n * 10 + c - '0';
+        n = n * 10 + digit;
         if (dot) {
             if (d > std::numeric_limits<std::int64_t>::max() / 10)
                 return {};
@@ -446,7 +448,7 @@ BmsChart make_chart(std::string_view b, bool conditions)
             continue;
         }
         if (measure_length_prefix) {
-            int m = (text[1] - '0') * 100 + (text[2] - '0') * 10 + text[3] - '0';
+            int m = (text[1] - '0') * 100 + (text[2] - '0') * 10 + (text[3] - '0');
             auto q = ratio(text.substr(7));
             if (!q) {
                 c.diagnostics.push_back({l.number, "invalid measure ratio in #mmm02 row"});
@@ -1621,6 +1623,45 @@ std::optional<std::string> BmsDocument::header(std::string_view key) const
     return out;
 }
 
+std::unordered_map<std::string, std::string> BmsDocument::header_index() const
+{
+    std::unordered_map<std::string, std::string> index;
+    if (has_conditionals_)
+        return index;
+    for (const Line line : lines(bytes_)) {
+        const auto [begin, ignored_end] = bounds(bytes_, line);
+        static_cast<void>(ignored_end);
+        const std::size_t end = line.end;
+        if (begin >= end || bytes_[begin] != '#')
+            continue;
+        std::size_t key_end = begin + 1;
+        while (key_end < end && !hspace(bytes_[key_end]))
+            ++key_end;
+        // `# TITLE` is not the TITLE key. header() requires the key to start
+        // immediately after '#' and to end at whitespace or the line end.
+        if (key_end == begin + 1)
+            continue;
+        std::string key(bytes_.substr(begin + 1, key_end - (begin + 1)));
+        for (char& character : key)
+            character = upper(character);
+        std::size_t value_begin = key_end;
+        while (value_begin < end && hspace(bytes_[value_begin]))
+            ++value_begin;
+        std::size_t value_end = end;
+        while (value_end > value_begin && hspace(bytes_[value_end - 1]))
+            --value_end;
+        std::string value(bytes_.substr(value_begin, value_end - value_begin));
+        if (key == "COMMENT") {
+            if (!value.empty() && value.front() == '"')
+                value.erase(value.begin());
+            if (!value.empty() && value.back() == '"')
+                value.pop_back();
+        }
+        index.insert_or_assign(std::move(key), std::move(value));
+    }
+    return index;
+}
+
 std::string BmsDocument::apply_patch_bytes(const std::string& s, const Patch& p, bool forward)
 {
     std::string out;
@@ -1665,9 +1706,7 @@ void BmsDocument::commit_patch(Patch patch)
     patch.after_revision = next_revision_;
     std::string updated = apply_patch_bytes(bytes_, patch, true);
 
-    // Reserve and build the replacement before changing document bytes or history.
-    undo_.reserve(undo_.size() + 1);
-    undo_.push_back(std::move(patch));
+    record_undo(std::move(patch));
     bytes_ = std::move(updated);
     has_conditionals_ = conditional(bytes_);
     redo_.clear();
@@ -2003,7 +2042,7 @@ void BmsDocument::set_measure_ratio(int measure, std::string_view decimal)
             text.size() >= 7 && text[0] == '#' && std::isdigit(static_cast<unsigned char>(text[1])) &&
             std::isdigit(static_cast<unsigned char>(text[2])) && std::isdigit(static_cast<unsigned char>(text[3])) &&
             text.substr(4, 2) == "02" && text[6] == ':' &&
-            (text[1] - '0') * 100 + (text[2] - '0') * 10 + text[3] - '0' == measure;
+            (text[1] - '0') * 100 + (text[2] - '0') * 10 + (text[3] - '0') == measure;
         if (!is_target)
             continue;
 
@@ -2423,8 +2462,7 @@ void BmsDocument::end_compound()
     patch.bytes.push_back(BytePatch{0, std::move(before), bytes_});
     patch.before_revision = current_revision_;
     patch.after_revision = next_revision_;
-    undo_.reserve(undo_.size() + 1);
-    undo_.push_back(std::move(patch));
+    record_undo(std::move(patch));
     redo_.clear();
     current_revision_ = undo_.back().after_revision;
     ++next_revision_;
@@ -2458,7 +2496,6 @@ bool BmsDocument::undo()
     if (undo_.empty())
         return false;
     auto u = apply_patch_bytes(bytes_, undo_.back(), false);
-    redo_.reserve(redo_.size() + 1);
     redo_.push_back(std::move(undo_.back()));
     bytes_ = std::move(u);
     has_conditionals_ = conditional(bytes_);
@@ -2477,8 +2514,7 @@ bool BmsDocument::redo()
     if (redo_.empty())
         return false;
     auto u = apply_patch_bytes(bytes_, redo_.back(), true);
-    undo_.reserve(undo_.size() + 1);
-    undo_.push_back(std::move(redo_.back()));
+    record_undo(std::move(redo_.back()));
     bytes_ = std::move(u);
     has_conditionals_ = conditional(bytes_);
     current_revision_ = undo_.back().after_revision;
@@ -2514,9 +2550,23 @@ void BmsDocument::mark_saved() noexcept
     saved_revision_ = current_revision_;
 }
 
+void BmsDocument::record_undo(Patch patch)
+{
+    constexpr std::size_t kMaxUndoDepth = 512;
+    undo_.push_back(std::move(patch));
+    if (undo_.size() > kMaxUndoDepth) {
+        undo_.erase(
+            undo_.begin(),
+            undo_.begin() + static_cast<std::ptrdiff_t>(undo_.size() - kMaxUndoDepth));
+    }
+}
+
 void BmsDocument::discard_history() noexcept
 {
-    abort_compound();
+    try {
+        abort_compound();
+    } catch (...) {
+    }
     undo_.clear();
     redo_.clear();
 }

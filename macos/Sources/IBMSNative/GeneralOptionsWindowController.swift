@@ -30,7 +30,11 @@ final class GeneralOptionsWindowController: NSWindowController {
     func present(over parent: NSWindow, settings: EditorSettings, completion: @escaping (EditorSettings?) -> Void) {
         pendingResult = nil
         content.load(settings)
-        parent.beginSheet(window!) { [weak self] _ in
+        guard let sheet = window else {
+            completion(nil)
+            return
+        }
+        parent.beginSheet(sheet) { [weak self] _ in
             completion(self?.pendingResult)
         }
     }
@@ -147,7 +151,10 @@ private final class GeneralOptionsDialogView: FlippedDialogView {
 
     func load(_ settings: EditorSettings) {
         draft = settings
-        encoding.selectItem(at: settings.textEncodingIndex)
+        let encodingIndex = settings.textEncodingIndex
+        if (0..<encoding.numberOfItems).contains(encodingIndex) {
+            encoding.selectItem(at: encodingIndex)
+        }
         wheel.selectItem(at: GeneralOptionsLayout.wheelIndex(for: settings.wheelStep))
         page.selectItem(at: GeneralOptionsLayout.pageIndex(for: settings.pageStep))
         gridPartition.integerValue = settings.gridPartition

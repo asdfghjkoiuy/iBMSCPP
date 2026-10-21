@@ -18,8 +18,8 @@ public:
     [[nodiscard]] static bool stop_x1296() noexcept;
 
 private:
-    static bool bpm_x1296_;
-    static bool stop_x1296_;
+    static thread_local bool bpm_x1296_;
+    static thread_local bool stop_x1296_;
 };
 
 class IndexedTimingRadixScope final {
